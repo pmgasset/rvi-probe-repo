@@ -23,11 +23,10 @@ jobs:
         run: |
           set -euxo pipefail
           curl -fsSL "https://codeload.github.com/openwrt/openwrt/tar.gz/refs/tags/v${OWRT_VER}" -o openwrt.tar.gz
-          ROOTDIR="$(tar -tf openwrt.tar.gz | head -1 | cut -d/ -f1)"
           mkdir -p tools/opkg
-          tar -xzf openwrt.tar.gz "${ROOTDIR}/scripts/ipkg-build" "${ROOTDIR}/scripts/ipkg-make-index.sh"
-          mv "${ROOTDIR}/scripts/ipkg-build" tools/opkg/ipkg-build
-          mv "${ROOTDIR}/scripts/ipkg-make-index.sh" tools/opkg/opkg-make-index
+          # Extract files directly without listing (avoids SIGPIPE with head)
+          tar -xzf openwrt.tar.gz --wildcards --to-stdout 'openwrt-*/scripts/ipkg-build' > tools/opkg/ipkg-build
+          tar -xzf openwrt.tar.gz --wildcards --to-stdout 'openwrt-*/scripts/ipkg-make-index.sh' > tools/opkg/opkg-make-index
           chmod +x tools/opkg/*
 
       - name: Install packager deps

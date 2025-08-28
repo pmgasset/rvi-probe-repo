@@ -40,8 +40,14 @@ jobs:
       run: |
         set -euxo pipefail
         mkdir -p shims
-        printf '#!/bin/bash\nexec sha256sum "$@"\n' > shims/sha256
-        printf '#!/bin/bash\nexec md5sum "$@"\n' > shims/md5
+        cat > shims/sha256 << 'EOF'
+        #!/bin/bash
+        exec sha256sum "$@"
+        EOF
+        cat > shims/md5 << 'EOF'
+        #!/bin/bash
+        exec md5sum "$@"
+        EOF
         chmod +x shims/sha256 shims/md5
         export PATH="$PWD/shims:$PATH"
         echo "PATH=$PWD/shims:$PATH" >> $GITHUB_ENV
@@ -51,35 +57,65 @@ jobs:
         set -euxo pipefail
         mkdir -p dist/repo dist/pkg/CONTROL dist/payload
         
-        # Create control file
-        printf 'Package: rvi-probe\nVersion: 0.5.0-1\nArchitecture: all\nMaintainer: RVInternetHelp <support@rvinternethelp.com>\nSection: net\nPriority: optional\nDepends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\nDescription: RVInternetHelp Network Probe\n Support/diagnostics agent with outage checks, speed tests,\n Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n' > dist/pkg/CONTROL/control
+        # Create control file with proper formatting
+        cat > dist/pkg/CONTROL/control << 'EOF'
+        Package: rvi-probe
+        Version: 0.5.0-1
+        Architecture: all
+        Maintainer: RVInternetHelp <support@rvinternethelp.com>
+        Section: net
+        Priority: optional
+        Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
+        Description: RVInternetHelp Network Probe
+         Support/diagnostics agent with outage checks, speed tests,
+         Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
+        EOF
         
-        # Copy package files
-        cp -r package/rvi-probe/files/* dist/payload/
+        # Verify control file
+        test -s dist/pkg/CONTROL/control
+        echo "Control file contents:"
+        cat dist/pkg/CONTROL/control
+        
+        # Copy package files, excluding CONTROL directory
+        rsync -av --exclude='CONTROL' package/rvi-probe/files/ dist/payload/
         
         # Set proper permissions
         find dist/payload -type f -name "*.sh" -exec chmod 755 {} \;
         find dist/payload -path "*/bin/*" -type f -exec chmod 755 {} \;
         find dist/payload -path "*/init.d/*" -type f -exec chmod 755 {} \;
         find dist/payload -path "*/cgi-bin/*" -type f -exec chmod 755 {} \;
+        find dist/payload -path "*/lib/*" -name "*.sh" -exec chmod 755 {} \;
         
         cd dist/pkg
         
         # Create debian-binary
         echo "2.0" > debian-binary
+        test -s debian-binary
         
         # Create control archive
-        tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
+        cd CONTROL
+        tar --owner=0 --group=0 --numeric-owner -czf ../control.tar.gz .
+        cd ..
+        test -s control.tar.gz
         
         # Create data archive
-        tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C ../payload .
+        cd ../payload
+        tar --owner=0 --group=0 --numeric-owner -czf ../pkg/data.tar.gz .
+        cd ../pkg
+        test -s data.tar.gz
         
-        # Create IPK using ar
-        ar -cr rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
+        # Create IPK using ar in correct order
+        ar rcD rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
+        
+        # Verify IPK was created and has content
+        test -s rvi-probe_0.5.0-1_all.ipk
+        ls -la rvi-probe_0.5.0-1_all.ipk
+        
+        # Verify IPK structure
+        ar -t rvi-probe_0.5.0-1_all.ipk
         
         # Move to repo directory
         mv rvi-probe_0.5.0-1_all.ipk ../repo/
-        test -s ../repo/rvi-probe_0.5.0-1_all.ipk
         echo "IPK package built successfully"
 
     - name: Generate package index
@@ -87,9 +123,22 @@ jobs:
         set -euxo pipefail
         cd dist/repo
         
+        # Verify IPK exists and is readable
+        test -s rvi-probe_0.5.0-1_all.ipk
+        file rvi-probe_0.5.0-1_all.ipk
+        
+        # Test extracting control from IPK to verify it's valid
+        echo "Testing IPK extraction..."
+        ar -p rvi-probe_0.5.0-1_all.ipk control.tar.gz | tar -tzf - | head -5
+        
         # Generate index using OpenWrt script
+        echo "Generating package index..."
         ../../ipkg-make-index.sh . > Packages
         test -s Packages
+        
+        # Show first few lines of generated index
+        echo "Generated Packages file (first 20 lines):"
+        head -20 Packages
         
         # Create compressed version
         gzip -fk9 Packages
@@ -100,6 +149,7 @@ jobs:
           echo "✅ rvi-probe found in index"
         else
           echo "❌ rvi-probe not found in index"
+          cat Packages
           exit 1
         fi
         

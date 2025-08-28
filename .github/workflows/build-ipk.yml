@@ -54,8 +54,11 @@ jobs:
         Description: RVI probe shell plugin for OpenWrt
         EOL
         
-        # Copy package files to payload (excluding CONTROL)
-        cp -r package/rvi-probe/files/* dist/payload/
+        # Copy package files to payload while excluding CONTROL scripts
+        rsync -a --exclude CONTROL package/rvi-probe/files/ dist/payload/
+
+        # Copy CONTROL scripts for packaging
+        cp package/rvi-probe/files/CONTROL/* dist/pkg/CONTROL/
         
         # Verify control file exists
         test -s dist/pkg/CONTROL/control
@@ -184,13 +187,15 @@ jobs:
         aws s3 cp rvi-probe_0.5.0-1_all.ipk \
           "s3://${R2_BUCKET}/openwrt/23.05/rvi-probe_0.5.0-1_all.ipk" \
           --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-          --acl public-read
+          --acl public-read \
+          --cache-control no-cache
         
         # Upload Packages index
         aws s3 cp Packages \
           "s3://${R2_BUCKET}/openwrt/23.05/Packages" \
           --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-          --acl public-read
+          --acl public-read \
+          --cache-control no-cache
         
         # Upload Packages.gz with correct MIME type
         aws s3 cp Packages.gz \
@@ -198,14 +203,16 @@ jobs:
           --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
           --acl public-read \
           --content-type "application/gzip" \
-          --metadata-directive REPLACE
+          --metadata-directive REPLACE \
+          --cache-control no-cache
         
         # Upload signature if it exists
         if [ -f Packages.sig ]; then
           aws s3 cp Packages.sig \
             "s3://${R2_BUCKET}/openwrt/23.05/Packages.sig" \
             --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-            --acl public-read
+            --acl public-read \
+            --cache-control no-cache
         fi
         
         echo "Upload completed successfully"

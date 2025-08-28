@@ -1,80 +1,64 @@
-name: Build librespeed-cli for OpenWrt arches
+name: Build librespeed-cli
 
 on:
-  workflow_dispatch: {}
   push:
-    branches: [ main ]
     paths:
       - '.github/workflows/build-librespeed.yml'
+  workflow_dispatch:
 
 jobs:
-  build-upload:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target:
-          - arch_name: mips_24kc          # OpenWrt arch folder name (X750/ath79)
-            goos: linux
-            goarch: mipsle               # Go arch (little endian MIPS)
-            extra_env: GOMIPS=softfloat  # no FPU on 24kc
-          - arch_name: aarch64_cortex-a53 # OpenWrt arch folder name (Filogic/X3000)
-            goos: linux
+        include:
+          - arch: mips_24kc
+            goarch: mipsle
+            gomips: softfloat
+          - arch: aarch64_cortex-a53
             goarch: arm64
-            extra_env: ""
+            gomips: ""
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_DEFAULT_REGION: auto
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: stable
 
-      - name: Build librespeed-cli (${{ matrix.target.arch_name }})
-        env:
-          GOOS: ${{ matrix.target.goos }}
-          GOARCH: ${{ matrix.target.goarch }}
-          GOMIPS: ${{ matrix.target.extra_env == 'GOMIPS=softfloat' && 'softfloat' || '' }}
-          CGO_ENABLED: 0
+      - name: Install AWS CLI v2
         run: |
           set -euxo pipefail
-          git clone --depth=1 https://github.com/librespeed/speedtest-cli.git
-          cd speedtest-cli
-          go build -trimpath -ldflags="-s -w" -o librespeed-cli .
-          file librespeed-cli || true
-          mkdir -p dist/librespeed/${{ matrix.target.arch_name }}
-          mv librespeed-cli dist/librespeed/${{ matrix.target.arch_name }}/librespeed-cli
-          sha256sum dist/librespeed/${{ matrix.target.arch_name }}/librespeed-cli > dist/librespeed/${{ matrix.target.arch_name }}/SHA256SUMS
-
-      - name: Upload artifact (optional)
-        uses: actions/upload-artifact@v4
-        with:
-          name: librespeed-${{ matrix.target.arch_name }}
-          path: dist/librespeed/${{ matrix.target.arch_name }}/*
-
-      - name: Publish to Cloudflare R2
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
-        run: |
-          set -euxo pipefail
-          # Install AWS CLI v2 (Ubuntu 24.04 has no awscli apt package)
-          sudo apt-get update
-          sudo apt-get install -y unzip
-          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
           unzip -q awscliv2.zip
-          sudo ./aws/install --update
-          aws --version
+          sudo ./aws/install
 
-          # Configure endpoint & creds for R2
+      - name: Build librespeed-cli
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          GOMIPS: ${{ matrix.gomips }}
+        run: |
+          set -euxo pipefail
+          curl -fsSL https://codeload.github.com/librespeed/speedtest-cli/tar.gz/refs/heads/master | tar -xz
+          cd speedtest-cli-*
+          go build -trimpath -ldflags="-s -w" -o librespeed-cli
+          mkdir -p "$GITHUB_WORKSPACE/dist/${{ matrix.arch }}"
+          cp librespeed-cli "$GITHUB_WORKSPACE/dist/${{ matrix.arch }}/"
+          cd "$GITHUB_WORKSPACE/dist/${{ matrix.arch }}"
+          sha256sum librespeed-cli > SHA256SUMS
+          test -s librespeed-cli
+          test -s SHA256SUMS
+
+      - name: Upload to R2
+        run: |
+          set -euxo pipefail
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws configure set aws_access_key_id "$R2_ACCESS_KEY_ID"
-          aws configure set aws_secret_access_key "$R2_SECRET_ACCESS_KEY"
-
-          # Upload binaries
-          aws s3 cp dist/librespeed "s3://${R2_BUCKET}/librespeed/23.05/" \
-            --endpoint-url "$ENDPOINT" --recursive --acl public-read --content-type application/octet-stream
-
-          echo "Published to: ${R2_PUBLIC_BASE}/librespeed/23.05/"
+          aws s3 cp "dist/${{ matrix.arch }}/librespeed-cli" "s3://${R2_BUCKET}/librespeed/23.05/${{ matrix.arch }}/" --endpoint-url "$ENDPOINT" --acl public-read
+          aws s3 cp "dist/${{ matrix.arch }}/SHA256SUMS" "s3://${R2_BUCKET}/librespeed/23.05/${{ matrix.arch }}/" --endpoint-url "$ENDPOINT" --acl public-read

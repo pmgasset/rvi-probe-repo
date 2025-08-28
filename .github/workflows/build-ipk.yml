@@ -1,4 +1,4 @@
-name: Build librespeed CLI
+name: Build OpenWrt IPK Package
 
 on:
   push:
@@ -8,36 +8,27 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-librespeed:
+  build-ipk:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: mips_24kc
-            goos: linux
-            goarch: mipsle
-            gomips: softfloat
-            cgo: 0
-          - arch: aarch64_cortex-a53
-            goos: linux
-            goarch: arm64
-            gomips: ""
-            cgo: 0
-
+    
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.21'
+    - name: Verify package structure
+      run: |
+        set -euxo pipefail
+        test -d package/rvi-probe/files || {
+          echo "ERROR: package/rvi-probe/files directory not found"
+          exit 1
+        }
+        echo "Package structure verified"
 
     - name: Install dependencies
       run: |
         set -euxo pipefail
         sudo apt-get update
-        sudo apt-get install -y curl unzip
+        sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils curl unzip sed
 
     - name: Install AWS CLI v2
       run: |
@@ -47,52 +38,110 @@ jobs:
         sudo ./aws/install --update
         aws --version
 
-    - name: Download librespeed-cli source
+    - name: Create checksum shims
       run: |
         set -euxo pipefail
-        curl -sL "https://codeload.github.com/librespeed/speedtest-cli/tar.gz/master" -o speedtest-cli.tar.gz
-        tar -xzf speedtest-cli.tar.gz
-        mv speedtest-cli-master speedtest-cli
-        test -d speedtest-cli
-        test -f speedtest-cli/main.go
+        mkdir -p "$HOME/bin"
+        printf '#!/bin/bash\nsha256sum "$@"\n' > "$HOME/bin/sha256"
+        printf '#!/bin/bash\nmd5sum "$@"\n' > "$HOME/bin/md5"
+        chmod +x "$HOME/bin/sha256" "$HOME/bin/md5"
+        export PATH="$HOME/bin:$PATH"
+        echo "PATH=$HOME/bin:$PATH" >> $GITHUB_ENV
 
-    - name: Build librespeed-cli
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        GOMIPS: ${{ matrix.gomips }}
-        CGO_ENABLED: ${{ matrix.cgo }}
+    - name: Download OpenWrt index script
       run: |
         set -euxo pipefail
-        cd speedtest-cli
-        
-        # Build the binary
-        go build -ldflags="-s -w" -o librespeed-cli .
-        test -s librespeed-cli
-        
-        # Verify it's the right architecture
-        file librespeed-cli
-        
-        # Create output directory
-        mkdir -p ../dist/${{ matrix.arch }}
-        mv librespeed-cli ../dist/${{ matrix.arch }}/
-        
-        echo "Build completed for ${{ matrix.arch }}"
+        curl -sL "https://codeload.github.com/openwrt/openwrt/tar.gz/v23.05.3" | \
+          tar -xzf - --to-stdout "openwrt-23.05.3/scripts/ipkg-make-index.sh" > ipkg-make-index.sh
+        chmod +x ipkg-make-index.sh
+        test -s ipkg-make-index.sh
 
-    - name: Generate checksums
+    - name: Prepare package build
       run: |
         set -euxo pipefail
-        cd dist/${{ matrix.arch }}
+        mkdir -p dist/pkg/CONTROL dist/payload
         
-        # Generate SHA256 checksum
-        sha256sum librespeed-cli > SHA256SUMS
-        test -s SHA256SUMS
+        # Create control file
+        cat > dist/pkg/CONTROL/control << 'EOL'
+        Package: rvi-probe
+        Version: 0.5.0-1
+        Architecture: all
+        Maintainer: OpenWrt Team
+        Section: net
+        Priority: optional
+        Description: RVI probe shell plugin for OpenWrt
+        EOL
         
-        # Verify checksum file
-        cat SHA256SUMS
-        sha256sum -c SHA256SUMS
+        # Copy package files to payload (excluding CONTROL)
+        cp -r package/rvi-probe/files/* dist/payload/
         
-        echo "Checksums generated and verified"
+        # Verify control file exists
+        test -s dist/pkg/CONTROL/control
+
+    - name: Build IPK package
+      run: |
+        set -euxo pipefail
+        cd dist/pkg
+        
+        # Create debian-binary
+        echo "2.0" > debian-binary
+        
+        # Create control archive
+        tar -czf control.tar.gz -C CONTROL .
+        test -s control.tar.gz
+        
+        # Create data archive
+        tar -czf data.tar.gz -C ../payload .
+        test -s data.tar.gz
+        
+        # Create final IPK using ar
+        ar -cr rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
+        test -s rvi-probe_0.5.0-1_all.ipk
+        
+        # Move IPK to dist root
+        mv rvi-probe_0.5.0-1_all.ipk ../
+        cd ..
+        test -s rvi-probe_0.5.0-1_all.ipk
+        echo "IPK package built successfully"
+
+    - name: Generate package index
+      run: |
+        set -euxo pipefail
+        cd dist
+        
+        # Generate Packages index
+        ../ipkg-make-index.sh . > Packages
+        test -s Packages
+        
+        # Create compressed version
+        gzip -c Packages > Packages.gz
+        test -s Packages.gz
+        
+        echo "Package index generated"
+
+    - name: Sign packages (if enabled)
+      run: |
+        set -euxo pipefail
+        if [ "${{ vars.SIGNING_ENABLED }}" = "1" ]; then
+          echo "Signing enabled, creating signature"
+          
+          # Decode private key
+          echo "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" | base64 -d > signing.key
+          
+          # Install usign (minimal version for signing only)
+          curl -sL "https://codeload.github.com/openwrt/usign/tar.gz/master" | \
+            tar -xzf - --to-stdout "usign-master/usign.c" > usign.c
+          gcc -o usign usign.c
+          
+          # Sign the Packages file
+          cd dist
+          ../usign -S -m Packages -s ../signing.key -x Packages.sig
+          test -s Packages.sig
+          
+          echo "Packages signed"
+        else
+          echo "Signing disabled, skipping signature"
+        fi
 
     - name: Upload to Cloudflare R2
       env:
@@ -102,24 +151,40 @@ jobs:
         R2_BUCKET: ${{ secrets.R2_BUCKET }}
       run: |
         set -euxo pipefail
-        cd dist/${{ matrix.arch }}
+        cd dist
         
-        # Upload binary
-        aws s3 cp librespeed-cli \
-          "s3://${R2_BUCKET}/librespeed/23.05/${{ matrix.arch }}/librespeed-cli" \
+        # Upload IPK package
+        aws s3 cp rvi-probe_0.5.0-1_all.ipk \
+          "s3://${R2_BUCKET}/openwrt/23.05/rvi-probe_0.5.0-1_all.ipk" \
           --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
           --acl public-read
         
-        # Upload checksums
-        aws s3 cp SHA256SUMS \
-          "s3://${R2_BUCKET}/librespeed/23.05/${{ matrix.arch }}/SHA256SUMS" \
+        # Upload Packages index
+        aws s3 cp Packages \
+          "s3://${R2_BUCKET}/openwrt/23.05/Packages" \
           --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
           --acl public-read
         
-        echo "Upload completed for ${{ matrix.arch }}"
+        # Upload Packages.gz with correct MIME type
+        aws s3 cp Packages.gz \
+          "s3://${R2_BUCKET}/openwrt/23.05/Packages.gz" \
+          --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+          --acl public-read \
+          --content-type "application/gzip" \
+          --metadata-directive REPLACE
+        
+        # Upload signature if it exists
+        if [ -f Packages.sig ]; then
+          aws s3 cp Packages.sig \
+            "s3://${R2_BUCKET}/openwrt/23.05/Packages.sig" \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --acl public-read
+        fi
+        
+        echo "Upload completed successfully"
 
     - name: Verify upload
       run: |
         set -euxo pipefail
-        echo "Build and upload completed successfully for ${{ matrix.arch }}!"
-        echo "Published to: ${{ secrets.R2_PUBLIC_BASE }}/librespeed/23.05/${{ matrix.arch }}/"
+        echo "Build and upload completed successfully!"
+        echo "Published to: ${{ secrets.R2_PUBLIC_BASE }}/openwrt/23.05/"

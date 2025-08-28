@@ -13,12 +13,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Get opkg-utils (from OpenWrt repo)
-        run: |
-          git clone --depth=1 https://github.com/openwrt/opkg-utils.git
-          chmod +x opkg-utils/*
+      # Fetch opkg-utils using the official checkout action to avoid anonymous git clone issues
+      - name: Checkout opkg-utils (OpenWrt)
+        uses: actions/checkout@v4
+        with:
+          repository: openwrt/opkg-utils
+          path: opkg-utils
+
+      - name: Make opkg-utils scripts executable
+        run: chmod +x opkg-utils/*
 
       - name: Install packager deps
         run: |
@@ -46,7 +52,7 @@ jobs:
             'Description: RVInternetHelp Network Probe (SupportLink UI, JSON status, cell metrics, speed tests). Post-install auto-configures loopback uHTTPd and (if present) cloudflared.' \
             > "$PKG/CONTROL/control"
 
-          # Ensure CONTROL scripts are executable
+          # Ensure CONTROL scripts are executable if present
           if [ -d "$PKG/CONTROL" ]; then
             chmod 0755 "$PKG/CONTROL/"* || true
           fi

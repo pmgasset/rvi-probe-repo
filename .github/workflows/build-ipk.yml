@@ -19,7 +19,7 @@ jobs:
       run: |
         set -euxo pipefail
         sudo apt-get update
-        sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils curl unzip sed
+        sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils curl unzip
 
     - name: Install AWS CLI v2
       run: |
@@ -29,85 +29,35 @@ jobs:
         sudo ./aws/install --update
         aws --version
 
-    # Create our own package indexing script (replicates opkg-make-index.sh functionality)
-    - name: Create package indexing script
+    - name: Download OpenWrt ipkg-make-index.sh
       run: |
         set -euxo pipefail
-        cat > scripts/make-index.sh << 'EOF'
-        #!/bin/bash
-        set -euo pipefail
-        
-        # Simple package index generator for OpenWrt IPK packages
-        # Replicates the functionality of opkg-make-index.sh
-        
-        PKG_DIR=${1:-.}
-        cd "$PKG_DIR"
-        
-        for ipk in *.ipk; do
-          [ -f "$ipk" ] || continue
-          
-          echo "Processing: $ipk" >&2
-          
-          # Create temp directory for extraction
-          TMP_DIR=$(mktemp -d)
-          trap "rm -rf $TMP_DIR" EXIT
-          
-          # Extract control.tar.gz from IPK
-          ar -p "$ipk" control.tar.gz | tar -xzf - -C "$TMP_DIR" 2>/dev/null || {
-            echo "Error: Failed to extract control from $ipk" >&2
-            continue
-          }
-          
-          # Read control file
-          if [ -f "$TMP_DIR/control" ]; then
-            CONTROL_FILE="$TMP_DIR/control"
-          else
-            echo "Error: No control file found in $ipk" >&2
-            continue
-          fi
-          
-          # Calculate file metadata
-          SIZE=$(stat -c%s "$ipk")
-          MD5=$(md5sum "$ipk" | cut -d' ' -f1)
-          SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
-          
-          # Output package information (OpenWrt Packages format)
-          cat "$CONTROL_FILE"
-          echo "Filename: $ipk"
-          echo "Size: $SIZE"
-          echo "MD5Sum: $MD5"
-          echo "SHA256sum: $SHA256"
-          echo ""
-          
-          rm -rf "$TMP_DIR"
-        done
-        EOF
-        
-        chmod +x scripts/make-index.sh
+        curl -fsSL "https://codeload.github.com/openwrt/openwrt/tar.gz/v23.05.3" | tar -xz --to-stdout "openwrt-23.05.3/scripts/ipkg-make-index.sh" > ipkg-make-index.sh
+        chmod +x ipkg-make-index.sh
+        test -s ipkg-make-index.sh
+
+    - name: Create checksum shims
+      run: |
+        set -euxo pipefail
+        mkdir -p shims
+        printf '#!/bin/bash\nexec sha256sum "$@"\n' > shims/sha256
+        printf '#!/bin/bash\nexec md5sum "$@"\n' > shims/md5
+        chmod +x shims/sha256 shims/md5
+        export PATH="$PWD/shims:$PATH"
+        echo "PATH=$PWD/shims:$PATH" >> $GITHUB_ENV
 
     - name: Build IPK package
       run: |
         set -euxo pipefail
-        mkdir -p dist/all dist/pkg/CONTROL dist/payload
+        mkdir -p dist/repo dist/pkg/CONTROL dist/payload
         
-        # Create control file with correct dependencies
-        cat > dist/pkg/CONTROL/control << 'EOL'
-        Package: rvi-probe
-        Version: 0.5.0-1
-        Architecture: all
-        Maintainer: RVInternetHelp <support@rvinternethelp.com>
-        Section: net
-        Priority: optional
-        Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
-        Description: RVInternetHelp Network Probe
-         Support/diagnostics agent with outage checks, speed tests, 
-         Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
-        EOL
+        # Create control file
+        printf 'Package: rvi-probe\nVersion: 0.5.0-1\nArchitecture: all\nMaintainer: RVInternetHelp <support@rvinternethelp.com>\nSection: net\nPriority: optional\nDepends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\nDescription: RVInternetHelp Network Probe\n Support/diagnostics agent with outage checks, speed tests,\n Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n' > dist/pkg/CONTROL/control
         
         # Copy package files
         cp -r package/rvi-probe/files/* dist/payload/
         
-        # Set proper permissions in the archive
+        # Set proper permissions
         find dist/payload -type f -name "*.sh" -exec chmod 755 {} \;
         find dist/payload -path "*/bin/*" -type f -exec chmod 755 {} \;
         find dist/payload -path "*/init.d/*" -type f -exec chmod 755 {} \;
@@ -118,43 +68,40 @@ jobs:
         # Create debian-binary
         echo "2.0" > debian-binary
         
-        # Create control archive (OpenWrt uses specific tar format)
+        # Create control archive
         tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
         
-        # Create data archive (OpenWrt uses specific tar format)  
+        # Create data archive
         tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C ../payload .
         
-        # Create IPK using ar (OpenWrt standard)
+        # Create IPK using ar
         ar -cr rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
         
-        # Move to architecture directory
-        mv rvi-probe_0.5.0-1_all.ipk ../all/
+        # Move to repo directory
+        mv rvi-probe_0.5.0-1_all.ipk ../repo/
+        test -s ../repo/rvi-probe_0.5.0-1_all.ipk
         echo "IPK package built successfully"
 
-    - name: Generate proper package index
+    - name: Generate package index
       run: |
         set -euxo pipefail
-        cd dist/all
+        cd dist/repo
         
-        # Use our custom package indexing script
-        ../../scripts/make-index.sh . > Packages
-        
-        # Verify the index was created
+        # Generate index using OpenWrt script
+        ../../ipkg-make-index.sh . > Packages
         test -s Packages
-        echo "Generated Packages index:"
-        head -20 Packages
         
-        # Verify package info is correct
+        # Create compressed version
+        gzip -fk9 Packages
+        test -s Packages.gz
+        
+        # Verify package is in index
         if grep -q "Package: rvi-probe" Packages; then
           echo "✅ rvi-probe found in index"
         else
           echo "❌ rvi-probe not found in index"
           exit 1
         fi
-        
-        # Create compressed version
-        gzip -fk9 Packages
-        test -s Packages.gz
         
         echo "Package index generated successfully"
 
@@ -164,26 +111,23 @@ jobs:
         if [ "${{ vars.SIGNING_ENABLED }}" = "1" ] && [ -n "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" ]; then
           echo "Signing packages..."
           
-          # Install usign from source
-          curl -fsSL "https://git.openwrt.org/project/usign.git/plain/usign.c" -o usign.c
-          curl -fsSL "https://git.openwrt.org/project/usign.git/plain/usign.h" -o usign.h
+          # Install usign dependencies
+          sudo apt-get install -y libbsd-dev build-essential cmake
           
-          # Simple compilation (may need adjustments for dependencies)
-          gcc -std=c99 -o usign usign.c || {
-            echo "Failed to compile usign, trying alternative approach..."
-            # Fallback to creating a dummy signature for testing
-            cd dist/all
-            echo "dummy signature for testing" > Packages.sig
-            echo "⚠️  Using dummy signature - install proper usign for production"
-            exit 0
-          }
+          # Download and build usign
+          curl -fsSL "https://codeload.github.com/openwrt/usign/tar.gz/master" | tar -xz
+          cd usign-master
+          cmake .
+          make
+          sudo make install
+          cd ..
           
           # Decode private key
           echo "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" | base64 -d > signing.key
           
           # Sign the Packages file
-          cd dist/all
-          if ../../usign -S -m Packages -s ../../signing.key -x Packages.sig 2>/dev/null; then
+          cd dist/repo
+          if usign -S -m Packages -s ../../signing.key -x Packages.sig 2>/dev/null; then
             test -s Packages.sig
             echo "✅ Packages signed successfully"
           else
@@ -201,35 +145,31 @@ jobs:
         R2_BUCKET: ${{ secrets.R2_BUCKET }}
       run: |
         set -euxo pipefail
-        cd dist/all
+        cd dist/repo
         
         ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-        
-        # Upload files with proper content types and cache control
         
         # Upload IPK package
         aws s3 cp rvi-probe_0.5.0-1_all.ipk \
           "s3://${R2_BUCKET}/openwrt/23.05/all/" \
           --endpoint-url "$ENDPOINT" \
           --acl public-read \
-          --content-type "application/octet-stream" \
-          --cache-control "max-age=3600"
+          --content-type "application/octet-stream"
         
-        # Upload Packages index with no-cache to ensure freshness
+        # Upload Packages index
         aws s3 cp Packages \
           "s3://${R2_BUCKET}/openwrt/23.05/all/" \
           --endpoint-url "$ENDPOINT" \
           --acl public-read \
-          --content-type "text/plain" \
-          --cache-control "no-cache, must-revalidate"
+          --content-type "text/plain"
         
-        # Upload Packages.gz
+        # Upload Packages.gz with proper content type
         aws s3 cp Packages.gz \
           "s3://${R2_BUCKET}/openwrt/23.05/all/" \
           --endpoint-url "$ENDPOINT" \
           --acl public-read \
           --content-type "application/gzip" \
-          --cache-control "no-cache, must-revalidate"
+          --metadata-directive REPLACE
         
         # Upload signature if it exists
         if [ -f Packages.sig ]; then
@@ -237,29 +177,26 @@ jobs:
             "s3://${R2_BUCKET}/openwrt/23.05/all/" \
             --endpoint-url "$ENDPOINT" \
             --acl public-read \
-            --content-type "application/octet-stream" \
-            --cache-control "no-cache, must-revalidate"
+            --content-type "application/octet-stream"
         fi
         
         echo "Upload completed successfully"
 
-    - name: Verify upload and checksums
+    - name: Verify upload
       env:
         R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
       run: |
         set -euxo pipefail
         
-        # Wait a moment for R2 consistency
+        # Wait for R2 consistency
         sleep 5
         
-        # Verify the uploaded files
+        # Verify uploaded files are accessible
         echo "Verifying uploaded files..."
-        
-        # Check if Packages file is accessible
         curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" | head -10
         
-        # Check if IPK is accessible and matches local checksum
-        LOCAL_MD5=$(md5sum dist/all/rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
+        # Check IPK checksum
+        LOCAL_MD5=$(md5sum dist/repo/rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
         REMOTE_MD5=$(curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/rvi-probe_0.5.0-1_all.ipk" | md5sum | cut -d' ' -f1)
         
         echo "Local MD5:  $LOCAL_MD5"

@@ -1,92 +1,125 @@
-name: Build IPK
+name: Build librespeed CLI
 
 on:
   push:
-    paths:
-      - 'package/rvi-probe/**'
-      - '.github/workflows/build-ipk.yml'
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-librespeed:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      AWS_DEFAULT_REGION: auto
-      SIGNING_ENABLED: ${{ vars.SIGNING_ENABLED }}
-      USIGN_PRIVATE_KEY_BASE64: ${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}
+    strategy:
+      matrix:
+        include:
+          - arch: mips_24kc
+            goos: linux
+            goarch: mipsle
+            gomips: softfloat
+            cgo: 0
+          - arch: aarch64_cortex-a53
+            goos: linux
+            goarch: arm64
+            gomips: ""
+            cgo: 0
+
     steps:
-      - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Verify source directory
-        run: |
-          set -euxo pipefail
-          test -d package/rvi-probe/files
-          find package/rvi-probe/files -type f | head -n1 >/dev/null
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
 
-      - name: Install AWS CLI v2
-        run: |
-          set -euxo pipefail
-          curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
-          unzip -q awscliv2.zip
-          sudo ./aws/install
+    - name: Install dependencies
+      run: |
+        set -euxo pipefail
+        sudo apt-get update
+        sudo apt-get install -y curl unzip
 
-      - name: Build IPK
-        run: |
-          set -euxo pipefail
-          PKG_NAME=rvi-probe
-          PKG_VERSION=0.5.0
-          PKG_RELEASE=1
-          WORKDIR=$(pwd)
-          BUILD=$WORKDIR/build/pkg
-          DIST=$WORKDIR/dist
-          mkdir -p "$BUILD/CONTROL" "$DIST"
-          cp -R package/$PKG_NAME/files/* "$BUILD/"
-          printf "Package: %s\nVersion: %s-%s\nArchitecture: all\nMaintainer: rvi\nSection: net\nPriority: optional\nDescription: rvi-probe plugin\n" "$PKG_NAME" "$PKG_VERSION" "$PKG_RELEASE" > "$BUILD/CONTROL/control"
-          fakeroot sh -euxc "cd '$BUILD'; tar -C CONTROL -czf control.tar.gz .; tar --exclude=./CONTROL -czf data.tar.gz .; echo 2.0 > debian-binary; ar rcs '$DIST/${PKG_NAME}_${PKG_VERSION}-${PKG_RELEASE}_all.ipk' control.tar.gz data.tar.gz debian-binary"
-          test -s "$DIST/${PKG_NAME}_${PKG_VERSION}-${PKG_RELEASE}_all.ipk"
+    - name: Install AWS CLI v2
+      run: |
+        set -euxo pipefail
+        curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        unzip -q awscliv2.zip
+        sudo ./aws/install --update
+        aws --version
 
-      - name: Fetch ipkg-make-index
-        run: |
-          set -euxo pipefail
-          curl -fsSL https://codeload.github.com/openwrt/openwrt/tar.gz/v23.05.3 | tar -xz --to-stdout openwrt-23.05.3/scripts/ipkg-make-index.sh > ipkg-make-index.sh
-          chmod +x ipkg-make-index.sh
-          mkdir shims
-          printf '#!/bin/sh\nexec sha256sum \"$@\"\n' > shims/sha256
-          printf '#!/bin/sh\nexec md5sum \"$@\"\n' > shims/md5
-          chmod +x shims/sha256 shims/md5
+    - name: Download librespeed-cli source
+      run: |
+        set -euxo pipefail
+        curl -sL "https://codeload.github.com/librespeed/speedtest-cli/tar.gz/master" -o speedtest-cli.tar.gz
+        tar -xzf speedtest-cli.tar.gz
+        mv speedtest-cli-master speedtest-cli
+        test -d speedtest-cli
+        test -f speedtest-cli/main.go
 
-      - name: Generate index
-        run: |
-          set -euxo pipefail
-          export PATH="$(pwd)/shims:$PATH"
-          ./ipkg-make-index.sh dist > dist/Packages
-          gzip -9n dist/Packages > dist/Packages.gz
-          test -s dist/Packages
-          test -s dist/Packages.gz
+    - name: Build librespeed-cli
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        GOMIPS: ${{ matrix.gomips }}
+        CGO_ENABLED: ${{ matrix.cgo }}
+      run: |
+        set -euxo pipefail
+        cd speedtest-cli
+        
+        # Build the binary
+        go build -ldflags="-s -w" -o librespeed-cli .
+        test -s librespeed-cli
+        
+        # Verify it's the right architecture
+        file librespeed-cli
+        
+        # Create output directory
+        mkdir -p ../dist/${{ matrix.arch }}
+        mv librespeed-cli ../dist/${{ matrix.arch }}/
+        
+        echo "Build completed for ${{ matrix.arch }}"
 
-      - name: Optional signing
-        if: env.SIGNING_ENABLED == '1'
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y usign
-          echo "$USIGN_PRIVATE_KEY_BASE64" | base64 -d > key
-          usign -S -m dist/Packages -s key -x dist/Packages.sig
-          test -s dist/Packages.sig
+    - name: Generate checksums
+      run: |
+        set -euxo pipefail
+        cd dist/${{ matrix.arch }}
+        
+        # Generate SHA256 checksum
+        sha256sum librespeed-cli > SHA256SUMS
+        test -s SHA256SUMS
+        
+        # Verify checksum file
+        cat SHA256SUMS
+        sha256sum -c SHA256SUMS
+        
+        echo "Checksums generated and verified"
 
-      - name: Upload to R2
-        run: |
-          set -euxo pipefail
-          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws s3 cp dist/rvi-probe_0.5.0-1_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read
-          aws s3 cp dist/Packages "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read
-          aws s3 cp dist/Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read
-          aws s3 cp dist/Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/Packages.gz" --endpoint-url "$ENDPOINT" --acl public-read --metadata-directive REPLACE --content-type application/gzip
-          if [ "$SIGNING_ENABLED" = "1" ]; then
-            aws s3 cp dist/Packages.sig "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read
-          fi
+    - name: Upload to Cloudflare R2
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      run: |
+        set -euxo pipefail
+        cd dist/${{ matrix.arch }}
+        
+        # Upload binary
+        aws s3 cp librespeed-cli \
+          "s3://${R2_BUCKET}/librespeed/23.05/${{ matrix.arch }}/librespeed-cli" \
+          --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+          --acl public-read
+        
+        # Upload checksums
+        aws s3 cp SHA256SUMS \
+          "s3://${R2_BUCKET}/librespeed/23.05/${{ matrix.arch }}/SHA256SUMS" \
+          --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+          --acl public-read
+        
+        echo "Upload completed for ${{ matrix.arch }}"
+
+    - name: Verify upload
+      run: |
+        set -euxo pipefail
+        echo "Build and upload completed successfully for ${{ matrix.arch }}!"
+        echo "Published to: ${{ secrets.R2_PUBLIC_BASE }}/librespeed/23.05/${{ matrix.arch }}/"

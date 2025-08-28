@@ -14,63 +14,84 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OWRT_VER: "23.05.3"
+      PKG_NAME: "rvi-probe"
+      PKG_VERSION: "0.5.0-1"
+      PKG_ARCH: "all"
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Pull the packaging scripts from a stable OpenWrt release tarball (no auth, no git)
-      - name: Fetch OpenWrt packaging scripts
+      - name: Install minimal build tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          # binutils provides `ar`; coreutils for md5sum/sha256sum; fakeroot for tar ownership
+          sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils unzip curl
+
+      - name: Fetch OpenWrt opkg-make-index script (from release tarball)
         run: |
           set -euxo pipefail
           curl -fsSL "https://codeload.github.com/openwrt/openwrt/tar.gz/refs/tags/v${OWRT_VER}" -o openwrt.tar.gz
           mkdir -p tools/opkg
-          # Extract directly to files (avoids tar | head SIGPIPE under pipefail)
-          tar -xzf openwrt.tar.gz --wildcards --to-stdout 'openwrt-*/scripts/ipkg-build' > tools/opkg/ipkg-build
+          # Extract index script directly (no tar | head pipeline)
           tar -xzf openwrt.tar.gz --wildcards --to-stdout 'openwrt-*/scripts/ipkg-make-index.sh' > tools/opkg/opkg-make-index
-          chmod +x tools/opkg/*
-
-      - name: Install packager deps
-        run: |
-          sudo apt-get update
-          # fakeroot for correct ownership in .ipk; coreutils for md5sum/sha256sum used by index script
-          sudo apt-get install -y fakeroot tar gzip findutils coreutils
+          chmod +x tools/opkg/opkg-make-index
 
       - name: Assemble package root
         run: |
           set -euxo pipefail
-          SRC="package/rvi-probe/files"
+          SRC="package/${PKG_NAME}/files"
           PKG="dist/pkg"
           test -d "$SRC" || { echo "Missing $SRC"; exit 1; }
           mkdir -p "$PKG"
           cp -a "$SRC"/. "$PKG"/
 
-          # CONTROL/control (normally produced by OpenWrt; we provide it here)
+          # CONTROL/control (OpenWrt style)
           mkdir -p "$PKG/CONTROL"
           printf '%s\n' \
-            'Package: rvi-probe' \
-            'Version: 0.5.0-1' \
-            'Architecture: all' \
-            'Maintainer: RVInternetHelp <support@rvinternethelp.com>' \
-            'Section: utils' \
-            'Priority: optional' \
-            'Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util' \
-            'Source: local' \
-            'Description: RVInternetHelp Network Probe (SupportLink UI, JSON status, cell metrics, speed tests). Post-install auto-configures loopback uHTTPd and (if present) cloudflared.' \
+            "Package: ${PKG_NAME}" \
+            "Version: ${PKG_VERSION}" \
+            "Architecture: ${PKG_ARCH}" \
+            "Maintainer: RVInternetHelp <support@rvinternethelp.com>" \
+            "Section: utils" \
+            "Priority: optional" \
+            "Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util" \
+            "Source: local" \
+            "Description: RVInternetHelp Network Probe (SupportLink UI, JSON status, cell metrics, speed tests). Post-install auto-configures loopback uHTTPd and (if present) cloudflared." \
             > "$PKG/CONTROL/control"
 
-          # CONTROL scripts must be executable (postinst/prerm/postrm if present)
+          # CONTROL scripts must be executable if present
           if [ -d "$PKG/CONTROL" ]; then
             chmod 0755 "$PKG/CONTROL/"* || true
           fi
 
-      - name: Build .ipk
+      - name: Build .ipk manually (ar + tar)
         run: |
           set -euxo pipefail
-          mkdir -p dist/repo
-          # NOTE: ipkg-build on 23.05.3 does NOT support -o/-g flags; do not pass them.
-          fakeroot tools/opkg/ipkg-build dist/pkg dist/repo
-          test -e dist/repo/*.ipk || { echo "No .ipk produced"; ls -al dist/repo; exit 1; }
-          ls -l dist/repo
+          OUT="dist/repo"
+          WORK="dist/work"
+          PKG="dist/pkg"
+          mkdir -p "$OUT" "$WORK"
+
+          # Required files for .ipk (Debian ar archive): debian-binary, control.tar.gz, data.tar.gz
+          echo "2.0" > "${WORK}/debian-binary"
+
+          # control.tar.gz (contents of CONTROL/*)
+          fakeroot bash -c 'cd dist/pkg/CONTROL && tar -czf ../../work/control.tar.gz --owner=0 --group=0 .'
+
+          # data.tar.gz (everything under pkg root except CONTROL)
+          fakeroot bash -c '
+            cd dist/pkg
+            # list top-level items excluding CONTROL
+            SHIP=$(find . -mindepth 1 -maxdepth 1 ! -name CONTROL -printf "%P\n")
+            [ -n "$SHIP" ] || { echo "No payload files to package"; exit 1; }
+            tar -czf ../work/data.tar.gz --owner=0 --group=0 $SHIP
+          '
+
+          # compose final .ipk
+          IPK="${OUT}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}.ipk"
+          ar -cr "$IPK" "${WORK}/debian-binary" "${WORK}/control.tar.gz" "${WORK}/data.tar.gz"
+          ls -l "$OUT"
 
       - name: Generate opkg index
         run: |

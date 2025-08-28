@@ -1,4 +1,5 @@
 name: Build librespeed-cli for OpenWrt arches
+
 on:
   workflow_dispatch: {}
   push:
@@ -12,10 +13,10 @@ jobs:
     strategy:
       matrix:
         target:
-          - arch_name: mips_24kc         # OpenWrt arch folder name (X750)
+          - arch_name: mips_24kc          # OpenWrt arch folder name (X750/ath79)
             goos: linux
-            goarch: mipsle              # Go arch for 24kc (little endian)
-            extra_env: GOMIPS=softfloat # no FPU on 24kc
+            goarch: mipsle               # Go arch (little endian MIPS)
+            extra_env: GOMIPS=softfloat  # no FPU on 24kc
           - arch_name: aarch64_cortex-a53 # OpenWrt arch folder name (Filogic/X3000)
             goos: linux
             goarch: arm64
@@ -26,7 +27,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-            go-version: '1.22.x'
+          go-version: '1.22.x'
 
       - name: Build librespeed-cli (${{ matrix.target.arch_name }})
         env:
@@ -35,10 +36,8 @@ jobs:
           GOMIPS: ${{ matrix.target.extra_env == 'GOMIPS=softfloat' && 'softfloat' || '' }}
           CGO_ENABLED: 0
         run: |
-          # Fetch official CLI
           git clone --depth=1 https://github.com/librespeed/speedtest-cli.git
           cd speedtest-cli
-          # Build statically, small
           go build -trimpath -ldflags="-s -w" -o librespeed-cli .
           file librespeed-cli
           mkdir -p dist/librespeed/${{ matrix.target.arch_name }}
@@ -59,22 +58,21 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
         run: |
-           # Install AWS CLI v2 on Ubuntu 24.04
-           sudo apt-get update
-           sudo apt-get install -y unzip
-           curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-           unzip -q awscliv2.zip
-           sudo ./aws/install --update
-            aws --version
+          # Install AWS CLI v2 (Ubuntu 24.04 has no awscli apt package)
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
 
-            # Configure endpoint & creds for R2
-           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-           aws configure set aws_access_key_id "$R2_ACCESS_KEY_ID"
-           aws configure set aws_secret_access_key "$R2_SECRET_ACCESS_KEY"
+          # Configure endpoint & creds for R2
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws configure set aws_access_key_id "$R2_ACCESS_KEY_ID"
+          aws configure set aws_secret_access_key "$R2_SECRET_ACCESS_KEY"
 
-           # Upload binaries
-            aws s3 cp dist/librespeed "s3://${R2_BUCKET}/librespeed/23.05/" \
+          # Upload binaries
+          aws s3 cp dist/librespeed "s3://${R2_BUCKET}/librespeed/23.05/" \
             --endpoint-url "$ENDPOINT" --recursive --acl public-read --content-type application/octet-stream
 
-            echo "Published to: ${R2_PUBLIC_BASE}/librespeed/23.05/"
-
+          echo "Published to: ${R2_PUBLIC_BASE}/librespeed/23.05/"

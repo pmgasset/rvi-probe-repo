@@ -1,4 +1,5 @@
 name: Build rvi-probe IPKs
+
 on:
   push:
     branches: [ main ]
@@ -19,19 +20,28 @@ jobs:
             sdk: https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
     steps:
       - uses: actions/checkout@v4
-      - name: Install deps
-        run: sudo apt-get update && sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync python3 jq curl
-      - name: Download SDK
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync python3 jq curl
+
+      - name: Download OpenWrt SDK
         run: |
           curl -fsSL "${{ matrix.target.sdk }}" -o sdk.txz
           tar xf sdk.txz
           SDK_DIR=$(echo openwrt-sdk-*)
           echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
+
       - name: Build package (noarch)
-        run: bash scripts/build-openwrt.sh "$SDK_DIR" "${{ matrix.target.name }}"
-      - name: Make index
-        run: bash scripts/mk-packages-index.sh "$SDK_DIR/bin/packages"
-      - name: Upload artifact
+        run: |
+          bash scripts/build-openwrt.sh "$SDK_DIR" "${{ matrix.target.name }}"
+
+      - name: Make opkg index
+        run: |
+          bash scripts/mk-packages-index.sh "$SDK_DIR/bin/packages"
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.target.name }}
@@ -46,20 +56,22 @@ jobs:
       SIGNING_ENABLED: ${{ vars.SIGNING_ENABLED }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
-      - - name: Install awscli v2 & usign
-          run: |
-            sudo apt-get update
-            sudo apt-get install -y unzip usign
-            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip -q awscliv2.zip
-            sudo ./aws/install --update
-            aws --version
 
-      - name: Import signing key
+      - name: Install awscli v2 & usign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip usign
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
+
+      - name: Import signing key (optional)
         if: env.SIGNING_ENABLED == '1'
         env:
           USIGN_PRIVATE_KEY_BASE64: ${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}
@@ -67,7 +79,8 @@ jobs:
           mkdir -p package-signing
           echo "$USIGN_PRIVATE_KEY_BASE64" | base64 -d > package-signing/usign-private.key
           chmod 600 package-signing/usign-private.key
-      - name: Sign Packages index
+
+      - name: Sign Packages index (optional)
         if: env.SIGNING_ENABLED == '1'
         run: |
           OUT=$(ls -d dist/ipk-*/**/bin/packages 2>/dev/null | head -n1 || true)
@@ -75,7 +88,8 @@ jobs:
           cp "$OUT/Packages" ./Packages
           usign -S -m Packages -s package-signing/usign-private.key -x Packages.sig
           cp Packages.sig "$OUT/"
-      - name: Publish to R2
+
+      - name: Publish to Cloudflare R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

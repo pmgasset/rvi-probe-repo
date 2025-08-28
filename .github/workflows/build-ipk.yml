@@ -26,7 +26,7 @@ jobs:
         set -euxo pipefail
         curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
         unzip -q awscliv2.zip
-        sudo ./aws/install
+        sudo ./aws/install --update
         aws --version
 
     - name: Download and setup OpenWrt SDK

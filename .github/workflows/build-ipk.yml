@@ -77,15 +77,24 @@ jobs:
         set -euxo pipefail
         cd openwrt-sdk/bin/packages
         
-        # Find the architecture directory
-        ARCH_DIR=$(find . -name "*.ipk" -exec dirname {} \; | head -1 | xargs basename)
-        echo "Found architecture: $ARCH_DIR"
+        # Find the architecture directory more safely
+        echo "Looking for built packages..."
+        find . -name "rvi-probe*.ipk" -type f
+        
+        # Get the directory containing our package
+        PACKAGE_PATH=$(find . -name "rvi-probe*.ipk" -type f | head -1)
+        if [ -z "$PACKAGE_PATH" ]; then
+          echo "ERROR: No rvi-probe package found!"
+          exit 1
+        fi
+        
+        ARCH_DIR=$(dirname "$PACKAGE_PATH")
+        echo "Found package in: $ARCH_DIR"
         
         cd "$ARCH_DIR"
         
         # Verify our package exists
-        test -f rvi-probe_*.ipk
-        ls -la rvi-probe_*.ipk
+        ls -la rvi-probe*.ipk
         
         # Generate package index using OpenWrt's script
         ../../scripts/ipkg-make-index.sh . > Packages
@@ -101,7 +110,10 @@ jobs:
       run: |
         set -euxo pipefail
         cd openwrt-sdk/bin/packages
-        ARCH_DIR=$(find . -name "*.ipk" -exec dirname {} \; | head -1 | xargs basename)
+        
+        # Find our package directory
+        PACKAGE_PATH=$(find . -name "rvi-probe*.ipk" -type f | head -1)
+        ARCH_DIR=$(dirname "$PACKAGE_PATH")
         cd "$ARCH_DIR"
         
         if [ "${{ vars.SIGNING_ENABLED }}" = "1" ] && [ -n "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" ]; then
@@ -140,7 +152,9 @@ jobs:
         set -euxo pipefail
         cd openwrt-sdk/bin/packages
         
-        ARCH_DIR=$(find . -name "*.ipk" -exec dirname {} \; | head -1 | xargs basename)
+        # Find our package directory
+        PACKAGE_PATH=$(find . -name "rvi-probe*.ipk" -type f | head -1)
+        ARCH_DIR=$(dirname "$PACKAGE_PATH")
         cd "$ARCH_DIR"
         
         ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
@@ -191,8 +205,7 @@ jobs:
         
         # Find the local IPK file for checksum verification
         cd openwrt-sdk/bin/packages
-        ARCH_DIR=$(find . -name "*.ipk" -exec dirname {} \; | head -1 | xargs basename)
-        LOCAL_IPK=$(find "$ARCH_DIR" -name "rvi-probe_*.ipk")
+        LOCAL_IPK=$(find . -name "rvi-probe*.ipk" -type f | head -1)
         IPK_NAME=$(basename "$LOCAL_IPK")
         
         LOCAL_MD5=$(md5sum "$LOCAL_IPK" | cut -d' ' -f1)

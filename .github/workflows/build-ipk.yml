@@ -25,19 +25,25 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          # binutils provides `ar`; coreutils has md5sum/sha256sum; fakeroot for tar ownership
-          sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils unzip curl sed
+          sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils unzip curl
 
-      - name: Fetch OpenWrt opkg-make-index (from fixed tag) and normalize checksums
+      - name: Fetch OpenWrt ipkg-make-index (fixed tag)
         run: |
           set -euxo pipefail
           curl -fsSL "https://codeload.github.com/openwrt/openwrt/tar.gz/refs/tags/v${OWRT_VER}" -o openwrt.tar.gz
           mkdir -p tools/opkg
           tar -xzf openwrt.tar.gz --wildcards --to-stdout 'openwrt-*/scripts/ipkg-make-index.sh' > tools/opkg/opkg-make-index
           chmod +x tools/opkg/opkg-make-index
-          # Normalize to GNU coreutils names (Ubuntu) to avoid `sha256: not found`
-          sed -i 's/\bsha256\b/sha256sum/g' tools/opkg/opkg-make-index
-          sed -i 's/\bmd5\b/md5sum/g' tools/opkg/opkg-make-index
+
+      - name: Provide checksum shims expected by the script
+        run: |
+          set -euxo pipefail
+          mkdir -p tools/bin
+          printf '%s\n' '#!/usr/bin/env bash' 'exec sha256sum "$@"' > tools/bin/sha256
+          printf '%s\n' '#!/usr/bin/env bash' 'exec md5sum "$@"'     > tools/bin/md5
+          chmod +x tools/bin/sha256 tools/bin/md5
+          echo "$PWD/tools/bin"  >> "$GITHUB_PATH"
+          echo "$PWD/tools/opkg" >> "$GITHUB_PATH"
 
       - name: Assemble package root
         run: |
@@ -48,7 +54,7 @@ jobs:
           mkdir -p "$PKG"
           cp -a "$SRC"/. "$PKG"/
 
-          # CONTROL/control (OpenWrt style)
+          # CONTROL/control (OpenWrt metadata) – no heredoc, all via printf to avoid YAML pitfalls
           mkdir -p "$PKG/CONTROL"
           printf '%s\n' \
             "Package: ${PKG_NAME}" \
@@ -62,9 +68,9 @@ jobs:
             "Description: RVInternetHelp Network Probe (SupportLink UI, JSON status, cell metrics, speed tests). Post-install auto-configures loopback uHTTPd and (if present) cloudflared." \
             > "$PKG/CONTROL/control"
 
-          # CONTROL scripts must be executable if present
+          # Ensure CONTROL scripts (if any) are executable
           if [ -d "$PKG/CONTROL" ]; then
-            chmod 0755 "$PKG/CONTROL/"* || true
+            find "$PKG/CONTROL" -maxdepth 1 -type f -exec chmod 0755 {} \; || true
           fi
 
       - name: Build .ipk manually (ar + tar under fakeroot)
@@ -94,13 +100,13 @@ jobs:
 
       - name: Generate opkg index
         env:
-          # Force script to use GNU coreutils names just in case
-          SHA256SUM: sha256sum
-          MD5SUM: md5sum
+          # Script will also find sha256/md5 via PATH shims above
+          SHA256: sha256sum
+          MD5: md5sum
         run: |
           set -euxo pipefail
           cd dist/repo
-          ../../tools/opkg/opkg-make-index . > Packages
+          opkg-make-index . > Packages
           gzip -9kf Packages
           test -s Packages && test -s Packages.gz
           ls -l
@@ -162,11 +168,9 @@ jobs:
           aws configure set aws_access_key_id "$R2_ACCESS_KEY_ID"
           aws configure set aws_secret_access_key "$R2_SECRET_ACCESS_KEY"
 
-          # Upload repo (ipk + Packages + Packages.gz [+ Packages.sig if present])
           aws s3 cp dist/repo "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --recursive --acl public-read --content-type application/octet-stream
 
-          # Ensure correct content-type for Packages.gz
           if [ -f dist/repo/Packages.gz ]; then
             aws s3 cp dist/repo/Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/Packages.gz" \
               --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --metadata-directive REPLACE

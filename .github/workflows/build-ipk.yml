@@ -16,15 +16,13 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Fetch opkg-utils using the official checkout action to avoid anonymous git clone issues
-      - name: Checkout opkg-utils (OpenWrt)
-        uses: actions/checkout@v4
-        with:
-          repository: openwrt/opkg-utils
-          path: opkg-utils
-
-      - name: Make opkg-utils scripts executable
-        run: chmod +x opkg-utils/*
+      # Fetch opkg-utils via public tarball (no auth)
+      - name: Fetch opkg-utils (tarball)
+        run: |
+          curl -fsSL https://codeload.github.com/openwrt/opkg-utils/tar.gz/refs/heads/master -o opkg-utils.tar.gz
+          mkdir -p opkg-utils
+          tar -xzf opkg-utils.tar.gz --strip-components=1 -C opkg-utils
+          chmod +x opkg-utils/*
 
       - name: Install packager deps
         run: |

@@ -29,28 +29,57 @@ jobs:
         sudo ./aws/install --update
         aws --version
 
-    - name: Download OpenWrt ipkg-make-index.sh
+    - name: Create package index generator
       run: |
         set -euxo pipefail
-        curl -fsSL "https://codeload.github.com/openwrt/openwrt/tar.gz/v23.05.3" | tar -xz --to-stdout "openwrt-23.05.3/scripts/ipkg-make-index.sh" > ipkg-make-index.sh
-        chmod +x ipkg-make-index.sh
-        test -s ipkg-make-index.sh
-
-    - name: Create checksum shims
-      run: |
-        set -euxo pipefail
-        mkdir -p shims
-        cat > shims/sha256 << 'EOF'
+        cat > make-package-index.sh << 'EOF'
         #!/bin/bash
-        exec sha256sum "$@"
+        set -euo pipefail
+        
+        PKG_DIR=${1:-.}
+        cd "$PKG_DIR"
+        
+        for ipk in *.ipk; do
+          [ -f "$ipk" ] || continue
+          
+          echo "Processing: $ipk" >&2
+          
+          # Create temp directory for extraction
+          TMP_DIR=$(mktemp -d)
+          trap "rm -rf $TMP_DIR" EXIT
+          
+          # Extract control.tar.gz from IPK
+          if ! ar -p "$ipk" control.tar.gz | tar -xzf - -C "$TMP_DIR" 2>/dev/null; then
+            echo "Error: Failed to extract control from $ipk" >&2
+            continue
+          fi
+          
+          # Read control file
+          if [ -f "$TMP_DIR/control" ]; then
+            CONTROL_FILE="$TMP_DIR/control"
+          else
+            echo "Error: No control file found in $ipk" >&2
+            continue
+          fi
+          
+          # Calculate file metadata
+          SIZE=$(stat -c%s "$ipk")
+          MD5=$(md5sum "$ipk" | cut -d' ' -f1)
+          SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
+          
+          # Output package information (OpenWrt Packages format)
+          cat "$CONTROL_FILE"
+          echo "Filename: $ipk"
+          echo "Size: $SIZE"
+          echo "MD5Sum: $MD5"
+          echo "SHA256sum: $SHA256"
+          echo ""
+          
+          rm -rf "$TMP_DIR"
+        done
         EOF
-        cat > shims/md5 << 'EOF'
-        #!/bin/bash
-        exec md5sum "$@"
-        EOF
-        chmod +x shims/sha256 shims/md5
-        export PATH="$PWD/shims:$PATH"
-        echo "PATH=$PWD/shims:$PATH" >> $GITHUB_ENV
+        
+        chmod +x make-package-index.sh
 
     - name: Build IPK package
       run: |
@@ -86,6 +115,10 @@ jobs:
         find dist/payload -path "*/cgi-bin/*" -type f -exec chmod 755 {} \;
         find dist/payload -path "*/lib/*" -name "*.sh" -exec chmod 755 {} \;
         
+        # Show payload structure
+        echo "Payload structure:"
+        find dist/payload -type f | head -10
+        
         cd dist/pkg
         
         # Create debian-binary
@@ -98,21 +131,36 @@ jobs:
         cd ..
         test -s control.tar.gz
         
+        # Verify control archive
+        echo "Control archive contents:"
+        tar -tzf control.tar.gz
+        
         # Create data archive
         cd ../payload
         tar --owner=0 --group=0 --numeric-owner -czf ../pkg/data.tar.gz .
         cd ../pkg
         test -s data.tar.gz
         
+        # Verify data archive has content
+        echo "Data archive size: $(stat -c%s data.tar.gz)"
+        echo "Data archive contents (first 10 files):"
+        tar -tzf data.tar.gz | head -10
+        
         # Create IPK using ar in correct order
         ar rcD rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
         
         # Verify IPK was created and has content
         test -s rvi-probe_0.5.0-1_all.ipk
-        ls -la rvi-probe_0.5.0-1_all.ipk
+        IPK_SIZE=$(stat -c%s rvi-probe_0.5.0-1_all.ipk)
+        echo "IPK size: $IPK_SIZE bytes"
         
         # Verify IPK structure
+        echo "IPK structure:"
         ar -t rvi-probe_0.5.0-1_all.ipk
+        
+        # Test that we can extract control from the IPK
+        echo "Testing control extraction from IPK:"
+        ar -p rvi-probe_0.5.0-1_all.ipk control.tar.gz | tar -tzf -
         
         # Move to repo directory
         mv rvi-probe_0.5.0-1_all.ipk ../repo/
@@ -125,20 +173,18 @@ jobs:
         
         # Verify IPK exists and is readable
         test -s rvi-probe_0.5.0-1_all.ipk
+        echo "Final IPK details:"
+        ls -la rvi-probe_0.5.0-1_all.ipk
         file rvi-probe_0.5.0-1_all.ipk
         
-        # Test extracting control from IPK to verify it's valid
-        echo "Testing IPK extraction..."
-        ar -p rvi-probe_0.5.0-1_all.ipk control.tar.gz | tar -tzf - | head -5
-        
-        # Generate index using OpenWrt script
+        # Generate index using our custom script
         echo "Generating package index..."
-        ../../ipkg-make-index.sh . > Packages
+        ../../make-package-index.sh . > Packages
         test -s Packages
         
-        # Show first few lines of generated index
-        echo "Generated Packages file (first 20 lines):"
-        head -20 Packages
+        # Show generated index
+        echo "Generated Packages file:"
+        cat Packages
         
         # Create compressed version
         gzip -fk9 Packages
@@ -149,9 +195,18 @@ jobs:
           echo "✅ rvi-probe found in index"
         else
           echo "❌ rvi-probe not found in index"
-          cat Packages
           exit 1
         fi
+        
+        # Verify all required fields are present
+        for field in "Version:" "Architecture:" "Filename:" "Size:" "MD5Sum:" "SHA256sum:"; do
+          if grep -q "$field" Packages; then
+            echo "✅ $field found"
+          else
+            echo "❌ $field missing"
+            exit 1
+          fi
+        done
         
         echo "Package index generated successfully"
 

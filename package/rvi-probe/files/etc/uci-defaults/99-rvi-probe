@@ -5,12 +5,10 @@ uci -q set rviprobe.config.worker_url='https://status-hunter.traveldata.workers.
 uci -q set rviprobe.config.telemetry_interval='300'
 uci -q set rviprobe.config.cf_tunnel='auto'
 uci -q commit rviprobe
-
 chmod 0755 /usr/bin/rvi-* 2>/dev/null || true
 chmod 0755 /usr/lib/rvi-probe/agent.sh 2>/dev/null || true
 chmod 0755 /usr/lib/rvi-probe/cell.sh 2>/dev/null || true
 chmod 0755 /www/cgi-bin/supportlink 2>/dev/null || true
 chmod 0755 /www/cgi-bin/json 2>/dev/null || true
-
 /etc/init.d/rvi-probe enable 2>/dev/null || true
 exit 0

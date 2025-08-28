@@ -4,6 +4,7 @@ PKG_NAME:=rvi-probe
 PKG_VERSION:=0.5.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
+PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -11,7 +12,7 @@ define Package/rvi-probe
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=RVInternetHelp Network Probe
-  DEPENDS:=+curl +ca-bundle +ca-certificates +jq +busybox +coreutils +coreutils-base64 +ip-full +procps-ng-ps +ubus +uclient-fetch +iwinfo +wireless-tools +openssl-util
+  DEPENDS:=+curl +ca-bundle +ca-certificates +jq +ip-full +ubus +uclient-fetch +iwinfo +wireless-tools +openssl-util
 endef
 
 define Package/rvi-probe/description

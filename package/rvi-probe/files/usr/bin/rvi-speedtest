@@ -3,48 +3,18 @@ set -eu
 R2_BASE=${R2_BASE:-"https://r2.your-cdn-domain/librespeed/23.05"}
 LS=/usr/bin/librespeed-cli
 OOKLA=/usr/bin/speedtest
-
 need_ls() { [ -x "$LS" ] && return 1 || return 0; }
-
 install_ls() {
-  if command -v opkg >/dev/null 2>&1; then
-    ARCH=$(opkg print-architecture 2>/dev/null | tail -n1 | awk '{print $2}')
-  else
-    ARCH=$(uname -m)
-  }
-  URL="$R2_BASE/$ARCH/librespeed-cli"
-  TMP=$(mktemp)
-  if curl -fsSL "$URL" -o "$TMP"; then
-    mv "$TMP" "$LS" && chmod 0755 "$LS"
-  else
-    rm -f "$TMP"; return 1
-  fi
+  if command -v opkg >/dev/null 2>&1; then ARCH=$(opkg print-architecture 2>/dev/null | tail -n1 | awk '{print $2}'); else ARCH=$(uname -m); fi
+  URL="$R2_BASE/$ARCH/librespeed-cli"; TMP=$(mktemp)
+  if curl -fsSL "$URL" -o "$TMP"; then mv "$TMP" "$LS" && chmod 0755 "$LS"; else rm -f "$TMP"; return 1; fi
 }
-
 if need_ls; then install_ls || true; fi
-
-if [ -x "$LS" ]; then
-  $LS -f json || $LS || true
-  exit 0
-fi
-
-if [ -x "$OOKLA" ]; then
-  $OOKLA -f json || $OOKLA || true
-  exit 0
-fi
-
-# Fallback curl-based probe
+if [ -x "$LS" ]; then $LS -f json || $LS || true; exit 0; fi
+if [ -x "$OOKLA" ]; then $OOKLA -f json || $OOKLA || true; exit 0; fi
 DOWN_URL=$(uci -q get rviprobe.config.speed_down_url); [ -z "$DOWN_URL" ] && DOWN_URL="https://speed.cloudflare.com/__down"
 UP_URL=$(uci -q get rviprobe.config.speed_up_url);   [ -z "$UP_URL" ] && UP_URL="https://speed.cloudflare.com/__up"
-START=$(date +%s)
-curl -fsS -o /dev/null "$DOWN_URL" &
-PID=$!
-sleep 10; kill -INT $PID 2>/dev/null || true
-END=$(date +%s)
-BYTES=$(cat /proc/$PID/io 2>/dev/null | awk '/read_bytes/ {print $2}' || echo 0)
-SECS=$((END-START)); [ $SECS -le 0 ] && SECS=1
-DOWN_Mbps=$((BYTES*8/SECS/1000000))
-JITTER=$(ping -c5 -W1 1.1.1.1 2>/dev/null | awk -F'/' '/rtt/{print $6}')
-RTT=$(ping -c3 -W1 1.1.1.1 2>/dev/null | awk -F'/' '/rtt/{print $5}')
-LOSS=$(ping -c5 -W1 1.1.1.1 2>/dev/null | awk -F"," '/packets transmitted/{print $3+0}' | tr -dc '0-9')
+START=$(date +%s); curl -fsS -o /dev/null "$DOWN_URL" & PID=$!; sleep 10; kill -INT $PID 2>/dev/null || true
+END=$(date +%s); BYTES=$(cat /proc/$PID/io 2>/dev/null | awk '/read_bytes/ {print $2}' || echo 0); SECS=$((END-START)); [ $SECS -le 0 ] && SECS=1
+DOWN_Mbps=$((BYTES*8/SECS/1000000)); JITTER=$(ping -c5 -W1 1.1.1.1 2>/dev/null | awk -F'/' '/rtt/{print $6}'); RTT=$(ping -c3 -W1 1.1.1.1 2>/dev/null | awk -F'/' '/rtt/{print $5}'); LOSS=$(ping -c5 -W1 1.1.1.1 2>/dev/null | awk -F"," '/packets transmitted/{print $3+0}' | tr -dc '0-9')
 printf '{"down_mbps":%s,"up_mbps":%s,"rtt_ms":%s,"jitter_ms":%s,"loss_pct":%s}\n' "$DOWN_Mbps" 0 "$RTT" "$JITTER" "$LOSS"

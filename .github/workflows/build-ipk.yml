@@ -15,12 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - name: ath79
-            sdk: https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          - name: ipq40xx
-            sdk: https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          - name: mediatek-filogic
-            sdk: https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/filogic/openwrt-sdk-23.05.3-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          - name: x86_64
+            sdk: https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
     steps:
       - uses: actions/checkout@v4
       - name: Install deps
@@ -31,7 +27,7 @@ jobs:
           tar xf sdk.txz
           SDK_DIR=$(echo openwrt-sdk-*)
           echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
-      - name: Build package
+      - name: Build package (noarch)
         run: bash scripts/build-openwrt.sh "$SDK_DIR" "${{ matrix.target.name }}"
       - name: Make index
         run: bash scripts/mk-packages-index.sh "$SDK_DIR/bin/packages"

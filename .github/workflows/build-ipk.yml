@@ -19,289 +19,108 @@ jobs:
       run: |
         set -euxo pipefail
         sudo apt-get update
-        sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils curl unzip
+        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 curl
 
     - name: Install AWS CLI v2
       run: |
         set -euxo pipefail
         curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
         unzip -q awscliv2.zip
-        sudo ./aws/install --update
+        sudo ./aws/install
         aws --version
 
-    - name: Create package index generator
+    - name: Download and setup OpenWrt SDK
       run: |
         set -euxo pipefail
-        cat > make-package-index.sh << 'EOF'
-        #!/bin/bash
-        set -euo pipefail
+        # Use a small, fast SDK - x86_64 generic is good for arch=all packages
+        SDK_URL="https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
         
-        PKG_DIR=${1:-.}
-        cd "$PKG_DIR"
+        echo "Downloading OpenWrt SDK..."
+        wget -q "$SDK_URL" -O sdk.tar.xz
         
-        for ipk in *.ipk; do
-          [ -f "$ipk" ] || continue
-          
-          echo "Processing: $ipk" >&2
-          
-          # Create temp directory for extraction
-          TMP_DIR=$(mktemp -d)
-          trap "rm -rf $TMP_DIR" EXIT
-          
-          # Extract control.tar.gz from IPK
-          if ! ar -p "$ipk" control.tar.gz | tar -xzf - -C "$TMP_DIR" 2>/dev/null; then
-            echo "Error: Failed to extract control from $ipk" >&2
-            continue
-          fi
-          
-          # Read control file
-          if [ -f "$TMP_DIR/control" ]; then
-            CONTROL_FILE="$TMP_DIR/control"
-          else
-            echo "Error: No control file found in $ipk" >&2
-            continue
-          fi
-          
-          # Calculate file metadata
-          SIZE=$(stat -c%s "$ipk")
-          MD5=$(md5sum "$ipk" | cut -d' ' -f1)
-          SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
-          
-          # Output package information (OpenWrt Packages format)
-          cat "$CONTROL_FILE"
-          echo "Filename: $ipk"
-          echo "Size: $SIZE"
-          echo "MD5Sum: $MD5"
-          echo "SHA256sum: $SHA256"
-          echo ""
-          
-          rm -rf "$TMP_DIR"
-        done
-        EOF
+        echo "Extracting SDK..."
+        tar -xf sdk.tar.xz
+        mv openwrt-sdk-* openwrt-sdk
         
-        chmod +x make-package-index.sh
+        echo "SDK ready"
 
-    - name: Build IPK package
+    - name: Setup package in SDK
       run: |
         set -euxo pipefail
-        mkdir -p dist/repo dist/pkg/CONTROL dist/payload
+        cd openwrt-sdk
         
-        # Create control file with proper formatting
-        cat > dist/pkg/CONTROL/control << 'EOF'
-        Package: rvi-probe
-        Version: 0.5.0-1
-        Architecture: all
-        Maintainer: RVInternetHelp <support@rvinternethelp.com>
-        Section: net
-        Priority: optional
-        Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
-        Description: RVInternetHelp Network Probe
-         Support/diagnostics agent with outage checks, speed tests,
-         Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
-        EOF
+        # Copy our package into the SDK
+        mkdir -p package/utils/rvi-probe
+        cp -r ../package/rvi-probe/* package/utils/rvi-probe/
         
-        # Verify control file
-        test -s dist/pkg/CONTROL/control
-        echo "Control file created successfully"
+        # Update feeds (this is fast since we're not building dependencies)
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
         
-        # Copy package files, excluding CONTROL directory
-        echo "Copying package files..."
-        rsync -av --exclude='CONTROL' package/rvi-probe/files/ dist/payload/
-        
-        # Verify files were copied
-        echo "Verifying payload files:"
-        FILE_COUNT=$(find dist/payload -type f | wc -l)
-        echo "Total files in payload: $FILE_COUNT"
-        
-        if [ "$FILE_COUNT" -eq 0 ]; then
-          echo "ERROR: No files found in payload directory!"
-          exit 1
-        fi
-        
-        # Set proper permissions
-        find dist/payload -type f -name "*.sh" -exec chmod 755 {} \;
-        find dist/payload -path "*/bin/*" -type f -exec chmod 755 {} \;
-        find dist/payload -path "*/init.d/*" -type f -exec chmod 755 {} \;
-        find dist/payload -path "*/cgi-bin/*" -type f -exec chmod 755 {} \;
-        find dist/payload -path "*/lib/*" -name "*.sh" -exec chmod 755 {} \;
-        
-        cd dist/pkg
-        
-        # Create debian-binary
-        echo "2.0" > debian-binary
-        test -s debian-binary
-        echo "debian-binary created"
-        
-        # Create control archive
-        echo "Creating control archive..."
-        cd CONTROL
-        tar --owner=0 --group=0 --numeric-owner -czf ../control.tar.gz .
-        cd ..
-        test -s control.tar.gz
-        
-        # Verify control archive
-        echo "Control archive verification:"
-        tar -tzf control.tar.gz 2>/dev/null || true
-        
-        # Create data archive
-        echo "Creating data archive..."
-        cd ../payload
-        
-        # Create the archive
-        tar --owner=0 --group=0 --numeric-owner -czf ../pkg/data.tar.gz .
-        
-        cd ../pkg
-        test -s data.tar.gz
-        
-        # Verify data archive has content
-        DATA_SIZE=$(stat -c%s data.tar.gz)
-        echo "Data archive size: $DATA_SIZE bytes"
-        
-        if [ "$DATA_SIZE" -lt 100 ]; then
-          echo "ERROR: Data archive is too small, likely empty!"
-          exit 1
-        fi
-        
-        # Verify data archive contents without pipes
-        echo "Data archive file count:"
-        tar -tzf data.tar.gz 2>/dev/null | wc -l || true
-        
-        echo "Data archive contains files (verified)"
-        
-        # Create IPK using ar in correct order
-        echo "Creating IPK..."
-        ar rcD rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
-        
-        # Verify IPK was created and has content
-        test -s rvi-probe_0.5.0-1_all.ipk
-        IPK_SIZE=$(stat -c%s rvi-probe_0.5.0-1_all.ipk)
-        echo "IPK size: $IPK_SIZE bytes"
-        
-        if [ "$IPK_SIZE" -lt 1000 ]; then
-          echo "ERROR: IPK is too small, likely missing data!"
-          exit 1
-        fi
-        
-        # Verify IPK structure
-        echo "IPK structure:"
-        ar -t rvi-probe_0.5.0-1_all.ipk
-        
-        # Test that we can extract both control and data from the IPK
-        echo "Testing IPK content extraction:"
-        echo "Control files:"
-        ar -p rvi-probe_0.5.0-1_all.ipk control.tar.gz | tar -tzf - 2>/dev/null || true
-        
-        echo "Data archive can be extracted (verified)"
-        ar -p rvi-probe_0.5.0-1_all.ipk data.tar.gz | tar -tzf - >/dev/null 2>&1 && echo "✅ Data archive extraction successful" || echo "❌ Data archive extraction failed"
-        
-        # Move to repo directory
-        mv rvi-probe_0.5.0-1_all.ipk ../repo/
-        echo "IPK package built successfully"
+        echo "Package setup complete"
 
-    - name: Verify IPK contents
+    - name: Build package
       run: |
         set -euxo pipefail
-        cd dist/repo
+        cd openwrt-sdk
         
-        # Create a test extraction to verify the IPK works
-        echo "Testing IPK extraction..."
-        mkdir -p test_extract
-        cd test_extract
+        # Configure for our package only (very fast)
+        make defconfig
         
-        # Extract the IPK
-        ar -x ../rvi-probe_0.5.0-1_all.ipk
+        # Build just our package
+        make package/rvi-probe/compile V=s
         
-        # Verify all parts exist
-        test -f debian-binary
-        test -f control.tar.gz  
-        test -f data.tar.gz
-        
-        echo "IPK parts verified"
-        
-        # Extract data to verify file structure
-        mkdir -p data_test
-        cd data_test
-        tar -xzf ../data.tar.gz
-        
-        echo "Files in extracted data:"
-        EXTRACTED_FILES=$(find . -type f | wc -l)
-        echo "Total extracted files: $EXTRACTED_FILES"
-        
-        # Verify key files exist
-        test -f etc/init.d/rvi-probe
-        test -f usr/bin/rvi-sharecode
-        test -f usr/lib/rvi-probe/agent.sh
-        
-        echo "✅ IPK content verification passed"
-        cd ../..
+        echo "Package built successfully"
 
     - name: Generate package index
       run: |
         set -euxo pipefail
-        cd dist/repo
+        cd openwrt-sdk/bin/packages
         
-        # Verify IPK exists and is readable
-        test -s rvi-probe_0.5.0-1_all.ipk
-        echo "Final IPK details:"
-        ls -la rvi-probe_0.5.0-1_all.ipk
-        file rvi-probe_0.5.0-1_all.ipk
+        # Find the architecture directory
+        ARCH_DIR=$(find . -name "*.ipk" -exec dirname {} \; | head -1 | xargs basename)
+        echo "Found architecture: $ARCH_DIR"
         
-        # Generate index using our custom script
-        echo "Generating package index..."
-        ../../make-package-index.sh . > Packages
+        cd "$ARCH_DIR"
+        
+        # Verify our package exists
+        test -f rvi-probe_*.ipk
+        ls -la rvi-probe_*.ipk
+        
+        # Generate package index using OpenWrt's script
+        ../../scripts/ipkg-make-index.sh . > Packages
         test -s Packages
-        
-        # Show generated index
-        echo "Generated Packages file:"
-        cat Packages
         
         # Create compressed version
         gzip -fk9 Packages
         test -s Packages.gz
         
-        # Verify package is in index
-        if grep -q "Package: rvi-probe" Packages; then
-          echo "✅ rvi-probe found in index"
-        else
-          echo "❌ rvi-probe not found in index"
-          exit 1
-        fi
-        
-        # Verify all required fields are present
-        for field in "Version:" "Architecture:" "Filename:" "Size:" "MD5Sum:" "SHA256sum:"; do
-          if grep -q "$field" Packages; then
-            echo "✅ $field found"
-          else
-            echo "❌ $field missing"
-            exit 1
-          fi
-        done
-        
-        echo "Package index generated successfully"
+        echo "Package index generated"
 
     - name: Sign packages (if enabled)
       run: |
         set -euxo pipefail
+        cd openwrt-sdk/bin/packages
+        ARCH_DIR=$(find . -name "*.ipk" -exec dirname {} \; | head -1 | xargs basename)
+        cd "$ARCH_DIR"
+        
         if [ "${{ vars.SIGNING_ENABLED }}" = "1" ] && [ -n "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" ]; then
           echo "Signing packages..."
           
-          # Install usign dependencies
+          # Install usign
           sudo apt-get install -y libbsd-dev build-essential cmake
-          
-          # Download and build usign
-          curl -fsSL "https://codeload.github.com/openwrt/usign/tar.gz/master" | tar -xz
-          cd usign-master
+          curl -fsSL "https://codeload.github.com/openwrt/usign/tar.gz/master" | tar -xz -C /tmp
+          cd /tmp/usign-master
           cmake .
           make
           sudo make install
-          cd ..
+          cd -
           
           # Decode private key
           echo "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" | base64 -d > signing.key
           
           # Sign the Packages file
-          cd dist/repo
-          if usign -S -m Packages -s ../../signing.key -x Packages.sig 2>/dev/null; then
+          if usign -S -m Packages -s signing.key -x Packages.sig 2>/dev/null; then
             test -s Packages.sig
             echo "✅ Packages signed successfully"
           else
@@ -319,12 +138,15 @@ jobs:
         R2_BUCKET: ${{ secrets.R2_BUCKET }}
       run: |
         set -euxo pipefail
-        cd dist/repo
+        cd openwrt-sdk/bin/packages
+        
+        ARCH_DIR=$(find . -name "*.ipk" -exec dirname {} \; | head -1 | xargs basename)
+        cd "$ARCH_DIR"
         
         ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
         
         # Upload IPK package
-        aws s3 cp rvi-probe_0.5.0-1_all.ipk \
+        aws s3 cp rvi-probe_*.ipk \
           "s3://${R2_BUCKET}/openwrt/23.05/all/" \
           --endpoint-url "$ENDPOINT" \
           --acl public-read \
@@ -337,7 +159,7 @@ jobs:
           --acl public-read \
           --content-type "text/plain"
         
-        # Upload Packages.gz with proper content type
+        # Upload Packages.gz
         aws s3 cp Packages.gz \
           "s3://${R2_BUCKET}/openwrt/23.05/all/" \
           --endpoint-url "$ENDPOINT" \
@@ -362,22 +184,25 @@ jobs:
       run: |
         set -euxo pipefail
         
-        # Wait for R2 consistency
         sleep 5
         
-        # Verify uploaded files are accessible
         echo "Verifying uploaded files..."
         curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" | head -10 || true
         
-        # Check IPK checksum
-        LOCAL_MD5=$(md5sum dist/repo/rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
-        REMOTE_MD5=$(curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/rvi-probe_0.5.0-1_all.ipk" | md5sum | cut -d' ' -f1)
+        # Find the local IPK file for checksum verification
+        cd openwrt-sdk/bin/packages
+        ARCH_DIR=$(find . -name "*.ipk" -exec dirname {} \; | head -1 | xargs basename)
+        LOCAL_IPK=$(find "$ARCH_DIR" -name "rvi-probe_*.ipk")
+        IPK_NAME=$(basename "$LOCAL_IPK")
+        
+        LOCAL_MD5=$(md5sum "$LOCAL_IPK" | cut -d' ' -f1)
+        REMOTE_MD5=$(curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/$IPK_NAME" | md5sum | cut -d' ' -f1)
         
         echo "Local MD5:  $LOCAL_MD5"
         echo "Remote MD5: $REMOTE_MD5"
         
         if [ "$LOCAL_MD5" = "$REMOTE_MD5" ]; then
-          echo "✅ Checksums match - upload successful"
+          echo "✅ Upload verification successful"
         else
           echo "❌ Checksum mismatch detected"
           exit 1

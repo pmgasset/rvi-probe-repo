@@ -99,16 +99,32 @@ jobs:
         for ipk in *.ipk; do
           echo "Processing: $ipk"
           
-          # Extract control.tar.gz from IPK
-          ar -p "$ipk" control.tar.gz | tar -xzf - control
+          # Create temp directory for extraction
+          mkdir -p tmp_extract
+          cd tmp_extract
           
-          # Calculate file size and hashes
+          # Extract control.tar.gz from IPK and then extract its contents
+          ar -p "../$ipk" control.tar.gz | tar -xzf -
+          
+          # Find and read the control file
+          if [ -f control ]; then
+            CONTROL_FILE="control"
+          elif [ -f ./control ]; then
+            CONTROL_FILE="./control"
+          else
+            echo "ERROR: control file not found in $ipk"
+            ls -la
+            exit 1
+          fi
+          
+          # Calculate file size and hashes for the IPK
+          cd ..
           SIZE=$(stat -c%s "$ipk")
           MD5=$(md5sum "$ipk" | cut -d' ' -f1)
           SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
           
-          # Read control file and add our fields
-          cat control
+          # Output package information
+          cat "tmp_extract/$CONTROL_FILE"
           echo "Filename: $ipk"
           echo "Size: $SIZE"
           echo "MD5Sum: $MD5"
@@ -116,7 +132,7 @@ jobs:
           echo ""
           
           # Clean up
-          rm -f control
+          rm -rf tmp_extract
         done
         EOL
         

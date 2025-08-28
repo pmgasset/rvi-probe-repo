@@ -102,11 +102,16 @@ jobs:
         
         # Verify control file
         test -s dist/pkg/CONTROL/control
-        echo "Control file contents:"
-        cat dist/pkg/CONTROL/control
+        echo "Control file created successfully"
         
         # Copy package files, excluding CONTROL directory
+        echo "Copying package files..."
         rsync -av --exclude='CONTROL' package/rvi-probe/files/ dist/payload/
+        
+        # Verify files were copied
+        echo "Verifying payload files:"
+        find dist/payload -type f | wc -l
+        find dist/payload -type f | sort
         
         # Set proper permissions
         find dist/payload -type f -name "*.sh" -exec chmod 755 {} \;
@@ -115,29 +120,40 @@ jobs:
         find dist/payload -path "*/cgi-bin/*" -type f -exec chmod 755 {} \;
         find dist/payload -path "*/lib/*" -name "*.sh" -exec chmod 755 {} \;
         
-        # Show payload structure
-        echo "Payload structure (first 10 files):"
-        find dist/payload -type f | head -10 || true
-        
         cd dist/pkg
         
         # Create debian-binary
         echo "2.0" > debian-binary
         test -s debian-binary
+        echo "debian-binary created"
         
         # Create control archive
+        echo "Creating control archive..."
         cd CONTROL
         tar --owner=0 --group=0 --numeric-owner -czf ../control.tar.gz .
         cd ..
         test -s control.tar.gz
         
         # Verify control archive
-        echo "Control archive contents:"
-        tar -tzf control.tar.gz || true
+        echo "Control archive verification:"
+        tar -tzf control.tar.gz
         
         # Create data archive
+        echo "Creating data archive..."
         cd ../payload
+        
+        # Verify we have files before creating archive
+        FILE_COUNT=$(find . -type f | wc -l)
+        echo "Files to include in data archive: $FILE_COUNT"
+        
+        if [ "$FILE_COUNT" -eq 0 ]; then
+          echo "ERROR: No files found in payload directory!"
+          exit 1
+        fi
+        
+        # Create the archive
         tar --owner=0 --group=0 --numeric-owner -czf ../pkg/data.tar.gz .
+        
         cd ../pkg
         test -s data.tar.gz
         
@@ -145,11 +161,20 @@ jobs:
         DATA_SIZE=$(stat -c%s data.tar.gz)
         echo "Data archive size: $DATA_SIZE bytes"
         
-        # Show sample of data archive contents
-        echo "Data archive contents (sample):"
-        tar -tzf data.tar.gz 2>/dev/null | head -10 || true
+        if [ "$DATA_SIZE" -lt 100 ]; then
+          echo "ERROR: Data archive is too small, likely empty!"
+          exit 1
+        fi
+        
+        # Verify data archive contents
+        echo "Data archive file count:"
+        tar -tzf data.tar.gz | wc -l
+        
+        echo "First 10 files in data archive:"
+        tar -tzf data.tar.gz | head -10
         
         # Create IPK using ar in correct order
+        echo "Creating IPK..."
         ar rcD rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
         
         # Verify IPK was created and has content
@@ -157,17 +182,62 @@ jobs:
         IPK_SIZE=$(stat -c%s rvi-probe_0.5.0-1_all.ipk)
         echo "IPK size: $IPK_SIZE bytes"
         
+        if [ "$IPK_SIZE" -lt 1000 ]; then
+          echo "ERROR: IPK is too small, likely missing data!"
+          exit 1
+        fi
+        
         # Verify IPK structure
         echo "IPK structure:"
         ar -t rvi-probe_0.5.0-1_all.ipk
         
-        # Test that we can extract control from the IPK
-        echo "Testing control extraction from IPK:"
-        ar -p rvi-probe_0.5.0-1_all.ipk control.tar.gz | tar -tzf - 2>/dev/null || true
+        # Test that we can extract both control and data from the IPK
+        echo "Testing IPK content extraction:"
+        echo "Control files:"
+        ar -p rvi-probe_0.5.0-1_all.ipk control.tar.gz | tar -tzf -
+        
+        echo "Data files (first 10):"
+        ar -p rvi-probe_0.5.0-1_all.ipk data.tar.gz | tar -tzf - | head -10
         
         # Move to repo directory
         mv rvi-probe_0.5.0-1_all.ipk ../repo/
         echo "IPK package built successfully"
+
+    - name: Verify IPK contents
+      run: |
+        set -euxo pipefail
+        cd dist/repo
+        
+        # Create a test extraction to verify the IPK works
+        echo "Testing IPK extraction..."
+        mkdir -p test_extract
+        cd test_extract
+        
+        # Extract the IPK
+        ar -x ../rvi-probe_0.5.0-1_all.ipk
+        
+        # Verify all parts exist
+        test -f debian-binary
+        test -f control.tar.gz  
+        test -f data.tar.gz
+        
+        echo "IPK parts verified"
+        
+        # Extract data to verify file structure
+        mkdir -p data_test
+        cd data_test
+        tar -xzf ../data.tar.gz
+        
+        echo "Files in extracted data:"
+        find . -type f | sort
+        
+        # Verify key files exist
+        test -f etc/init.d/rvi-probe
+        test -f usr/bin/rvi-sharecode
+        test -f usr/lib/rvi-probe/agent.sh
+        
+        echo "✅ IPK content verification passed"
+        cd ../..
 
     - name: Generate package index
       run: |

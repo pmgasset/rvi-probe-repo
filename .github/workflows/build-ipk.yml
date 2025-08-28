@@ -38,24 +38,6 @@ jobs:
         sudo ./aws/install --update
         aws --version
 
-    - name: Create checksum shims
-      run: |
-        set -euxo pipefail
-        mkdir -p "$HOME/bin"
-        printf '#!/bin/bash\nsha256sum "$@"\n' > "$HOME/bin/sha256"
-        printf '#!/bin/bash\nmd5sum "$@"\n' > "$HOME/bin/md5"
-        chmod +x "$HOME/bin/sha256" "$HOME/bin/md5"
-        export PATH="$HOME/bin:$PATH"
-        echo "PATH=$HOME/bin:$PATH" >> $GITHUB_ENV
-
-    - name: Download OpenWrt index script
-      run: |
-        set -euxo pipefail
-        curl -sL "https://codeload.github.com/openwrt/openwrt/tar.gz/v23.05.3" | \
-          tar -xzf - --to-stdout "openwrt-23.05.3/scripts/ipkg-make-index.sh" > ipkg-make-index.sh
-        chmod +x ipkg-make-index.sh
-        test -s ipkg-make-index.sh
-
     - name: Prepare package build
       run: |
         set -euxo pipefail
@@ -109,8 +91,37 @@ jobs:
         set -euxo pipefail
         cd dist
         
-        # Generate Packages index
-        ../ipkg-make-index.sh . > Packages
+        # Create minimal index generator script
+        cat > generate_index.sh << 'EOL'
+        #!/bin/bash
+        set -euo pipefail
+        
+        for ipk in *.ipk; do
+          echo "Processing: $ipk"
+          
+          # Extract control.tar.gz from IPK
+          ar -p "$ipk" control.tar.gz | tar -xzf - control
+          
+          # Calculate file size and hashes
+          SIZE=$(stat -c%s "$ipk")
+          MD5=$(md5sum "$ipk" | cut -d' ' -f1)
+          SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
+          
+          # Read control file and add our fields
+          cat control
+          echo "Filename: $ipk"
+          echo "Size: $SIZE"
+          echo "MD5Sum: $MD5"
+          echo "SHA256sum: $SHA256"
+          echo ""
+          
+          # Clean up
+          rm -f control
+        done
+        EOL
+        
+        chmod +x generate_index.sh
+        ./generate_index.sh > Packages
         test -s Packages
         
         # Create compressed version

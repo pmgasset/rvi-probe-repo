@@ -25,17 +25,19 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          # binutils provides `ar`; coreutils for md5sum/sha256sum; fakeroot for tar ownership
-          sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils unzip curl
+          # binutils provides `ar`; coreutils has md5sum/sha256sum; fakeroot for tar ownership
+          sudo apt-get install -y binutils coreutils fakeroot tar gzip findutils unzip curl sed
 
-      - name: Fetch OpenWrt opkg-make-index script (from release tarball)
+      - name: Fetch OpenWrt opkg-make-index (from fixed tag) and normalize checksums
         run: |
           set -euxo pipefail
           curl -fsSL "https://codeload.github.com/openwrt/openwrt/tar.gz/refs/tags/v${OWRT_VER}" -o openwrt.tar.gz
           mkdir -p tools/opkg
-          # Extract index script directly (no tar | head pipeline)
           tar -xzf openwrt.tar.gz --wildcards --to-stdout 'openwrt-*/scripts/ipkg-make-index.sh' > tools/opkg/opkg-make-index
           chmod +x tools/opkg/opkg-make-index
+          # Normalize to GNU coreutils names (Ubuntu) to avoid `sha256: not found`
+          sed -i 's/\bsha256\b/sha256sum/g' tools/opkg/opkg-make-index
+          sed -i 's/\bmd5\b/md5sum/g' tools/opkg/opkg-make-index
 
       - name: Assemble package root
         run: |
@@ -65,7 +67,7 @@ jobs:
             chmod 0755 "$PKG/CONTROL/"* || true
           fi
 
-      - name: Build .ipk manually (ar + tar)
+      - name: Build .ipk manually (ar + tar under fakeroot)
         run: |
           set -euxo pipefail
           OUT="dist/repo"
@@ -73,27 +75,28 @@ jobs:
           PKG="dist/pkg"
           mkdir -p "$OUT" "$WORK"
 
-          # Required files for .ipk (Debian ar archive): debian-binary, control.tar.gz, data.tar.gz
+          # debian-binary + control.tar.gz + data.tar.gz
           echo "2.0" > "${WORK}/debian-binary"
 
-          # control.tar.gz (contents of CONTROL/*)
           fakeroot bash -c 'cd dist/pkg/CONTROL && tar -czf ../../work/control.tar.gz --owner=0 --group=0 .'
 
-          # data.tar.gz (everything under pkg root except CONTROL)
           fakeroot bash -c '
             cd dist/pkg
-            # list top-level items excluding CONTROL
             SHIP=$(find . -mindepth 1 -maxdepth 1 ! -name CONTROL -printf "%P\n")
             [ -n "$SHIP" ] || { echo "No payload files to package"; exit 1; }
             tar -czf ../work/data.tar.gz --owner=0 --group=0 $SHIP
           '
 
-          # compose final .ipk
           IPK="${OUT}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}.ipk"
           ar -cr "$IPK" "${WORK}/debian-binary" "${WORK}/control.tar.gz" "${WORK}/data.tar.gz"
+          test -s "$IPK"
           ls -l "$OUT"
 
       - name: Generate opkg index
+        env:
+          # Force script to use GNU coreutils names just in case
+          SHA256SUM: sha256sum
+          MD5SUM: md5sum
         run: |
           set -euxo pipefail
           cd dist/repo

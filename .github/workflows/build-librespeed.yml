@@ -36,10 +36,11 @@ jobs:
           GOMIPS: ${{ matrix.target.extra_env == 'GOMIPS=softfloat' && 'softfloat' || '' }}
           CGO_ENABLED: 0
         run: |
+          set -euxo pipefail
           git clone --depth=1 https://github.com/librespeed/speedtest-cli.git
           cd speedtest-cli
           go build -trimpath -ldflags="-s -w" -o librespeed-cli .
-          file librespeed-cli
+          file librespeed-cli || true
           mkdir -p dist/librespeed/${{ matrix.target.arch_name }}
           mv librespeed-cli dist/librespeed/${{ matrix.target.arch_name }}/librespeed-cli
           sha256sum dist/librespeed/${{ matrix.target.arch_name }}/librespeed-cli > dist/librespeed/${{ matrix.target.arch_name }}/SHA256SUMS
@@ -58,6 +59,7 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
         run: |
+          set -euxo pipefail
           # Install AWS CLI v2 (Ubuntu 24.04 has no awscli apt package)
           sudo apt-get update
           sudo apt-get install -y unzip

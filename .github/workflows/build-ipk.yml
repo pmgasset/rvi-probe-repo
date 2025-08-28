@@ -12,17 +12,23 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      OWRT_VER: "23.05.3"
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Fetch opkg-utils via public tarball (no auth)
-      - name: Fetch opkg-utils (tarball)
+      # Fetch ipkg-build + ipkg-make-index.sh from an OpenWrt release tarball (no auth)
+      - name: Fetch OpenWrt packaging scripts
         run: |
-          curl -fsSL https://codeload.github.com/openwrt/opkg-utils/tar.gz/refs/heads/master -o opkg-utils.tar.gz
-          mkdir -p opkg-utils
-          tar -xzf opkg-utils.tar.gz --strip-components=1 -C opkg-utils
-          chmod +x opkg-utils/*
+          set -euxo pipefail
+          curl -fsSL "https://codeload.github.com/openwrt/openwrt/tar.gz/refs/tags/v${OWRT_VER}" -o openwrt.tar.gz
+          ROOTDIR="$(tar -tf openwrt.tar.gz | head -1 | cut -d/ -f1)"
+          mkdir -p tools/opkg
+          tar -xzf openwrt.tar.gz "${ROOTDIR}/scripts/ipkg-build" "${ROOTDIR}/scripts/ipkg-make-index.sh"
+          mv "${ROOTDIR}/scripts/ipkg-build" tools/opkg/ipkg-build
+          mv "${ROOTDIR}/scripts/ipkg-make-index.sh" tools/opkg/opkg-make-index
+          chmod +x tools/opkg/*
 
       - name: Install packager deps
         run: |
@@ -31,6 +37,7 @@ jobs:
 
       - name: Assemble package root
         run: |
+          set -euxo pipefail
           SRC="package/rvi-probe/files"
           PKG="dist/pkg"
           mkdir -p "$PKG"
@@ -57,16 +64,16 @@ jobs:
 
       - name: Build .ipk with ipkg-build
         run: |
+          set -euxo pipefail
           mkdir -p dist/repo
-          OPKG="./opkg-utils"
-          fakeroot "${OPKG}/ipkg-build" -o root -g root dist/pkg dist/repo
+          fakeroot tools/opkg/ipkg-build -o root -g root dist/pkg dist/repo
           ls -l dist/repo
 
       - name: Generate opkg index
         run: |
-          OPKG="./opkg-utils"
+          set -euxo pipefail
           cd dist/repo
-          "${OPKG}/opkg-make-index" . > Packages
+          ../../tools/opkg/opkg-make-index . > Packages
           gzip -9kf Packages
           ls -l
 
@@ -93,6 +100,7 @@ jobs:
 
       - name: Install awscli v2 & usign
         run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y unzip usign
           curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
@@ -105,6 +113,7 @@ jobs:
         env:
           USIGN_PRIVATE_KEY_BASE64: ${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}
         run: |
+          set -euxo pipefail
           mkdir -p package-signing
           echo "$USIGN_PRIVATE_KEY_BASE64" | base64 -d > package-signing/usign-private.key
           chmod 600 package-signing/usign-private.key
@@ -120,6 +129,7 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
         run: |
+          set -euxo pipefail
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           aws configure set aws_access_key_id "$R2_ACCESS_KEY_ID"
           aws configure set aws_secret_access_key "$R2_SECRET_ACCESS_KEY"

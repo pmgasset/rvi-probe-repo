@@ -1,0 +1,6 @@
+url: http://127.0.0.1:8081
+metrics: 127.0.0.1:2000
+ingress:
+  - hostname: probe.yourdomain.tld
+    service: http://127.0.0.1:8081
+  - service: http_status:404

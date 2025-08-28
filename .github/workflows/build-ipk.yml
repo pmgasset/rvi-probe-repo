@@ -1,0 +1,85 @@
+name: Build rvi-probe IPKs
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'package/**'
+      - '.github/workflows/build-ipk.yml'
+      - 'scripts/**'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: ath79
+            sdk: https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          - name: ipq40xx
+            sdk: https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          - name: mediatek-filogic
+            sdk: https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/filogic/openwrt-sdk-23.05.3-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync python3 jq curl
+      - name: Download SDK
+        run: |
+          curl -fsSL "${{ matrix.target.sdk }}" -o sdk.txz
+          tar xf sdk.txz
+          SDK_DIR=$(echo openwrt-sdk-*)
+          echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
+      - name: Build package
+        run: bash scripts/build-openwrt.sh "$SDK_DIR" "${{ matrix.target.name }}"
+      - name: Make index
+        run: bash scripts/mk-packages-index.sh "$SDK_DIR/bin/packages"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-${{ matrix.target.name }}
+          path: |
+            ${{ env.SDK_DIR }}/bin/packages/**/*
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      SIGNING_ENABLED: ${{ vars.SIGNING_ENABLED }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Install awscli & usign
+        run: sudo apt-get update && sudo apt-get install -y awscli usign
+      - name: Import signing key
+        if: env.SIGNING_ENABLED == '1'
+        env:
+          USIGN_PRIVATE_KEY_BASE64: ${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}
+        run: |
+          mkdir -p package-signing
+          echo "$USIGN_PRIVATE_KEY_BASE64" | base64 -d > package-signing/usign-private.key
+          chmod 600 package-signing/usign-private.key
+      - name: Sign Packages index
+        if: env.SIGNING_ENABLED == '1'
+        run: |
+          OUT=$(ls -d dist/ipk-*/**/bin/packages 2>/dev/null | head -n1 || true)
+          if [ -z "$OUT" ]; then echo "No packages dir"; exit 1; fi
+          cp "$OUT/Packages" ./Packages
+          usign -S -m Packages -s package-signing/usign-private.key -x Packages.sig
+          cp Packages.sig "$OUT/"
+      - name: Publish to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
+        run: |
+          OUT=$(ls -d dist/ipk-*/**/bin/packages 2>/dev/null | head -n1 || true)
+          if [ -z "$OUT" ]; then echo "No packages dir found"; exit 1; fi
+          bash scripts/publish-r2.sh "$OUT"

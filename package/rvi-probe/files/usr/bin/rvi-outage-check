@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+WORKER_URL=$(uci -q get rviprobe.config.worker_url)
+if [ -z "$WORKER_URL" ]; then
+  echo "Worker URL not set. Configure rviprobe.config.worker_url" >&2
+  exit 1
+fi
+curl -fsS "$WORKER_URL?fn=status" || echo '{"status":"unknown"}'

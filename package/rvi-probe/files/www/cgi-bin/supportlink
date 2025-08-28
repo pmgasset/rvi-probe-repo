@@ -1,0 +1,51 @@
+#!/bin/sh
+printf "Content-Type: text/html\r\n\r\n"
+cat <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><title>RVInternetHelp Support</title>
+<style>
+body{font-family:system-ui,Segoe UI,Arial;margin:20px}
+.btn{display:inline-block;padding:10px 14px;margin:8px 8px 8px 0;border:1px solid #ccc;border-radius:10px;text-decoration:none}
+.badge{padding:2px 8px;border-radius:8px}
+pre{background:#f6f6f6;padding:10px;border-radius:8px;overflow:auto}
+.small{font-size:12px;color:#666}
+</style></head><body>
+<h1>RVInternetHelp — Support Panel</h1>
+<div>
+  <a class="btn" href="/cgi-bin/supportlink?act=share">Generate Share Code</a>
+  <a class="btn" href="/cgi-bin/supportlink?act=speed">Run Speed Test</a>
+  <a class="btn" href="/cgi-bin/supportlink?act=outage">Outage Check</a>
+  <a class="btn" href="/cgi-bin/supportlink?act=diag">Diagnostics</a>
+  <a class="btn" href="/cgi-bin/supportlink?act=cell">Cell Metrics</a>
+</div>
+<div class="small">Worker: $(uci -q get rviprobe.config.worker_url)</div>
+<div id="out"></div>
+HTML
+
+ACT="${QUERY_STRING#act=}"
+case "$ACT" in
+  share)
+    CODE=$(/usr/bin/rvi-sharecode 2>/dev/null || echo ERR)
+    echo "<h3>Share Code:</h3><pre>$CODE</pre>";;
+  speed)
+    echo "<h3>Speed Test</h3><pre>$(/usr/bin/rvi-speedtest 2>&1)</pre>";;
+  outage)
+    echo "<h3>Outage Check</h3><pre>$(/usr/bin/rvi-outage-check 2>&1)</pre>";;
+  diag)
+    IF=$(uci -q get network.wan.ifname 2>/dev/null); IP=$(ip -4 addr show "$IF" 2>/dev/null | awk '/inet /{print $2}')
+    echo "<h3>Diagnostics</h3><pre>Host: $(hostname)
+Board: $(cat /tmp/sysinfo/board_name 2>/dev/null)
+Model: $(ubus -S call system board | jq -r .model 2>/dev/null)
+Firmware: $(ubus -S call system board | jq -r .release.description 2>/dev/null)
+WAN IF: $IF
+IP: $IP
+Ping: $(ping -c1 -W1 1.1.1.1 | awk -F'/' '/rtt/{print $5" ms"}')
+</pre>";;
+  cell)
+    echo "<h3>Cell Metrics</h3><pre>$(/usr/lib/rvi-probe/cell.sh 2>&1)</pre>";;
+  *)
+    echo "<p>Use the buttons above to run actions.</p>";;
+esac
+
+cat <<'HTML'
+</body></html>
+HTML

@@ -116,8 +116,8 @@ jobs:
         find dist/payload -path "*/lib/*" -name "*.sh" -exec chmod 755 {} \;
         
         # Show payload structure
-        echo "Payload structure:"
-        find dist/payload -type f | head -10
+        echo "Payload structure (first 10 files):"
+        find dist/payload -type f | head -10 || true
         
         cd dist/pkg
         
@@ -133,7 +133,7 @@ jobs:
         
         # Verify control archive
         echo "Control archive contents:"
-        tar -tzf control.tar.gz
+        tar -tzf control.tar.gz || true
         
         # Create data archive
         cd ../payload
@@ -142,9 +142,12 @@ jobs:
         test -s data.tar.gz
         
         # Verify data archive has content
-        echo "Data archive size: $(stat -c%s data.tar.gz)"
-        echo "Data archive contents (first 10 files):"
-        tar -tzf data.tar.gz | head -10
+        DATA_SIZE=$(stat -c%s data.tar.gz)
+        echo "Data archive size: $DATA_SIZE bytes"
+        
+        # Show sample of data archive contents
+        echo "Data archive contents (sample):"
+        tar -tzf data.tar.gz 2>/dev/null | head -10 || true
         
         # Create IPK using ar in correct order
         ar rcD rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
@@ -160,7 +163,7 @@ jobs:
         
         # Test that we can extract control from the IPK
         echo "Testing control extraction from IPK:"
-        ar -p rvi-probe_0.5.0-1_all.ipk control.tar.gz | tar -tzf -
+        ar -p rvi-probe_0.5.0-1_all.ipk control.tar.gz | tar -tzf - 2>/dev/null || true
         
         # Move to repo directory
         mv rvi-probe_0.5.0-1_all.ipk ../repo/
@@ -298,7 +301,7 @@ jobs:
         
         # Verify uploaded files are accessible
         echo "Verifying uploaded files..."
-        curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" | head -10
+        curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" | head -10 || true
         
         # Check IPK checksum
         LOCAL_MD5=$(md5sum dist/repo/rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)

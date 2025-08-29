@@ -3,7 +3,9 @@ name: Debug TAR Archive IPK
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    paths:
+      - 'package/rvi-probe/**'
+      - '.github/workflows/build-ipk.yml'
 
 jobs:
   build:

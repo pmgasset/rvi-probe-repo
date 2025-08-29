@@ -1,201 +1,100 @@
-name: Fast OpenWrt IPK Build
+- name: Create IPK package manually
+  run: |
+    set -euxo pipefail
 
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+    mkdir -p build/{CONTROL,data}
 
-jobs:
-  fast-build:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    # Copy from a rootfs-style folder
+    # (change this to match your repo; using package/rvi-probe/root here)
+    if [ ! -d package/rvi-probe/root ]; then
+      echo "ERROR: package/rvi-probe/root does not exist. Add your files here (etc/, usr/, www/, ...)."
+      exit 1
+    fi
 
-    - name: Install minimal dependencies
-      run: |
-        set -euxo pipefail
-        sudo apt-get update
-        sudo apt-get install -y binutils gzip curl
+    # Copy while preserving perms/exec bits
+    rsync -a package/rvi-probe/root/ build/data/
 
-    - name: Install AWS CLI v2
-      run: |
-        set -euxo pipefail
-        curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-        unzip -q awscliv2.zip
-        sudo ./aws/install --update
-        aws --version
+    # Sanity check: ensure at least 1 regular file
+    FILECOUNT=$(find build/data -type f | wc -l | tr -d ' ')
+    if [ "$FILECOUNT" -lt 1 ]; then
+      echo "ERROR: No files found to package. Aborting."
+      find package/rvi-probe -maxdepth 3 -print
+      exit 1
+    fi
 
-    - name: Create IPK package manually
-      run: |
-        set -euxo pipefail
-        
-        # Create build directories
-        mkdir -p build/{CONTROL,data}
-        
-        # Copy package files to data directory
-        cp -r package/rvi-probe/files/* build/data/
-        
-        # Set proper permissions (crucial for OpenWrt)
-        find build/data -name "*.sh" -exec chmod 755 {} \;
-        find build/data -path "*/bin/*" -type f -exec chmod 755 {} \;
-        find build/data -path "*/init.d/*" -type f -exec chmod 755 {} \;
-        find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} \;
-        find build/data -path "*/lib/rvi-probe/*" -exec chmod 755 {} \;
-        
-        # Create control file
-        cat > build/CONTROL/control << 'EOF'
-        Package: rvi-probe
-        Version: 0.5.0-1
-        Architecture: all
-        Maintainer: RVInternetHelp <support@rvinternethelp.com>
-        Section: net
-        Priority: optional
-        Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
-        Description: RVInternetHelp Network Probe
-         Support/diagnostics agent with outage checks, speed tests,
-         Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
-        EOF
-        
-        # Copy install scripts if they exist
-        [ -f package/rvi-probe/files/CONTROL/preinst ] && cp package/rvi-probe/files/CONTROL/preinst build/CONTROL/ || true
-        [ -f package/rvi-probe/files/CONTROL/postinst ] && cp package/rvi-probe/files/CONTROL/postinst build/CONTROL/ || true
-        [ -f package/rvi-probe/files/CONTROL/prerm ] && cp package/rvi-probe/files/CONTROL/prerm build/CONTROL/ || true
-        [ -f package/rvi-probe/files/CONTROL/postrm ] && cp package/rvi-probe/files/CONTROL/postrm build/CONTROL/ || true
-        
-        # Build IPK package
-        cd build
-        
-        # Create debian-binary
-        echo "2.0" > debian-binary
-        
-        # Create control archive
-        tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
-        
-        # Create data archive
-        tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data .
-        
-        # Create IPK using ar
-        ar -cr rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
-        
-        # Verify the IPK was created
-        ls -la rvi-probe_0.5.0-1_all.ipk
-        file rvi-probe_0.5.0-1_all.ipk
-        
-        echo "IPK package built successfully"
+    # Ensure common script paths are executable (idempotent)
+    find build/data -path "*/bin/*" -type f -exec chmod 755 {} +
+    find build/data -path "*/sbin/*" -type f -exec chmod 755 {} +
+    find build/data -path "*/init.d/*" -type f -exec chmod 755 {} +
+    find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} +
+    find build/data -name "*.sh" -type f -exec chmod 755 {} +
 
-    - name: Create clean package index
-      run: |
-        set -euxo pipefail
-        
-        cd build
-        
-        # Get file metadata
-        SIZE=$(stat -c%s rvi-probe_0.5.0-1_all.ipk)
-        MD5=$(md5sum rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
-        SHA256=$(sha256sum rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
-        
-        # Create Packages file
-        cat > Packages << EOF
-        Package: rvi-probe
-        Version: 0.5.0-1
-        Architecture: all
-        Maintainer: RVInternetHelp <support@rvinternethelp.com>
-        Section: net
-        Priority: optional
-        Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
-        Description: RVInternetHelp Network Probe
-         Support/diagnostics agent with outage checks, speed tests,
-         Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
-        Filename: rvi-probe_0.5.0-1_all.ipk
-        Size: $SIZE
-        MD5Sum: $MD5
-        SHA256sum: $SHA256
-        
-        EOF
-        
-        # Validate packages file
-        PKG_COUNT=$(grep -c '^Package:' Packages)
-        PKG_SIZE=$(wc -c < Packages)
-        
-        echo "Packages file validation:"
-        echo "- Package count: $PKG_COUNT (should be 1)"
-        echo "- File size: $PKG_SIZE bytes (should be 500-800)"
-        
-        if [ "$PKG_COUNT" != "1" ]; then
-          echo "ERROR: Expected exactly 1 package, got $PKG_COUNT"
-          exit 1
-        fi
-        
-        echo "Generated clean Packages file:"
-        cat Packages
-        
-        # Create compressed version
-        gzip -fk9 Packages
-        
-        echo "Final files:"
-        ls -la *.ipk Packages*
+    # CONTROL/control
+    cat > build/CONTROL/control << 'EOF'
+    Package: rvi-probe
+    Version: 0.5.0-1
+    Architecture: all
+    Maintainer: RVInternetHelp <support@rvinternethelp.com>
+    Section: net
+    Priority: optional
+    Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
+    Description: RVInternetHelp Network Probe
+     Support/diagnostics agent with outage checks, speed tests,
+     Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
+    EOF
 
-    - name: Upload to Cloudflare R2
-      env:
-        R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-        R2_BUCKET: ${{ secrets.R2_BUCKET }}
-        R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
-      run: |
-        set -euxo pipefail
-        
-        cd build
-        
-        echo "Files to upload:"
-        ls -la *.ipk Packages*
-        
-        # Set AWS credentials and endpoint
-        export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-        export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-        ENDPOINT="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
-        
-        # Upload IPK package
-        aws s3 cp rvi-probe_0.5.0-1_all.ipk "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream
-        
-        # Upload Packages files
-        aws s3 cp Packages "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type text/plain --cache-control "no-cache"
-        aws s3 cp Packages.gz "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --cache-control "no-cache"
-        
-        echo "Published to: $R2_PUBLIC_BASE/openwrt/23.05/all/"
+    # Optional maintainer scripts (if present)
+    for f in preinst postinst prerm postrm; do
+      if [ -f package/rvi-probe/CONTROL/$f ]; then
+        install -m 755 package/rvi-probe/CONTROL/$f build/CONTROL/$f
+      fi
+    done
 
-    - name: Verify upload
-      env:
-        R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
-      run: |
-        set -euxo pipefail
-        
-        sleep 3
-        
-        echo "Verifying uploaded files..."
-        
-        # Check if Packages file is accessible and contains our package
-        if curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" | grep -q "Package: rvi-probe"; then
-          echo "✅ Packages file uploaded and contains rvi-probe"
-        else
-          echo "❌ Packages file missing or doesn't contain rvi-probe"
-          exit 1
-        fi
-        
-        # Verify IPK upload
-        LOCAL_MD5=$(md5sum build/rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
-        REMOTE_MD5=$(curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/rvi-probe_0.5.0-1_all.ipk" | md5sum | cut -d' ' -f1)
-        
-        echo "Local MD5:  $LOCAL_MD5"
-        echo "Remote MD5: $REMOTE_MD5"
-        
-        if [ "$LOCAL_MD5" = "$REMOTE_MD5" ]; then
-          echo "✅ Upload verification successful"
-        else
-          echo "❌ Checksum mismatch detected"
-          exit 1
-        fi
+    cd build
+
+    echo "2.0" > debian-binary
+    tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
+    tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data .
+
+    # EXTRA VALIDATION: list contents
+    echo "=== control.tar.gz ==="; tar -tzf control.tar.gz
+    echo "=== data.tar.gz (should list your files) ==="; tar -tzf data.tar.gz
+
+    # Fail if data archive is tiny
+    DATASIZE=$(stat -c%s data.tar.gz)
+    if [ "$DATASIZE" -lt 100 ]; then
+      echo "ERROR: data.tar.gz is too small; likely empty."
+      exit 1
+    fi
+
+    ar -cr rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
+    ls -la rvi-probe_0.5.0-1_all.ipk
+    file rvi-probe_0.5.0-1_all.ipk
+    echo "IPK package built successfully"
+
+- name: Create clean package index
+  run: |
+    set -euxo pipefail
+    cd build
+    SIZE=$(stat -c%s rvi-probe_0.5.0-1_all.ipk)
+    MD5=$(md5sum rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
+    SHA256=$(sha256sum rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
+    cat > Packages << EOF
+    Package: rvi-probe
+    Version: 0.5.0-1
+    Architecture: all
+    Maintainer: RVInternetHelp <support@rvinternethelp.com>
+    Section: net
+    Priority: optional
+    Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
+    Description: RVInternetHelp Network Probe
+     Support/diagnostics agent with outage checks, speed tests,
+     Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
+    Filename: rvi-probe_0.5.0-1_all.ipk
+    Size: $SIZE
+    MD5Sum: $MD5
+    SHA256sum: $SHA256
+    EOF
+    grep -n '^Package:' Packages
+    gzip -fk9 Packages
+    ls -la *.ipk Packages*

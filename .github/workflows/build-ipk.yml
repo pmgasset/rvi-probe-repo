@@ -207,5 +207,213 @@ jobs:
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/octet-stream --cache-control 'no-cache' --metadata-directive REPLACE
             
-          echo "✅ Upload complete - version 0.5.0-4 ready for testing"
+          echo "✅ Upload complete - version 0.5.0-4 ready for testing"name: Debug TAR Archive IPK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install AWS CLI v2
+        run: |
+          curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+
+      - name: Debug and create IPK with extensive validation
+        run: |
+          set -euxo pipefail
           
+          # Clean build
+          rm -rf build
+          mkdir -p build/{CONTROL,data}
+
+          echo "=== STEP 1: Source Analysis ==="
+          echo "Repository structure:"
+          find package/rvi-probe -type f | head -15
+          
+          echo "=== STEP 2: File Copy with Validation ==="
+          # Copy files (exclude CONTROL from data)
+          find package/rvi-probe/files -maxdepth 1 -mindepth 1 -not -name CONTROL -print0 | xargs -0 -I {} cp -r {} build/data/
+          
+          echo "Files after copy:"
+          find build/data -type f | sort
+          echo "Total files copied: $(find build/data -type f | wc -l)"
+
+          # Set permissions
+          find build/data -path "*/bin/*" -type f -exec chmod 755 {} + || true
+          find build/data -path "*/init.d/*" -type f -exec chmod 755 {} + || true
+          find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} + || true
+          find build/data -name "*.sh" -type f -exec chmod 755 {} + || true
+
+          echo "=== STEP 3: Create Control Files ==="
+          # Create control file
+          cat > build/CONTROL/control <<'EOC'
+          Package: rvi-probe
+          Version: 0.5.0-4
+          Architecture: all
+          Maintainer: RVInternetHelp <support@rvinternethelp.com>
+          Section: net
+          Priority: optional
+          Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
+          Description: RVInternetHelp Network Probe
+           Support/diagnostics agent with outage checks, speed tests,
+           Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
+          EOC
+
+          # Copy maintainer scripts
+          for f in preinst postinst prerm postrm; do
+            if [ -f package/rvi-probe/files/CONTROL/$f ]; then
+              echo "Copying maintainer script: $f"
+              install -m 755 package/rvi-probe/files/CONTROL/$f build/CONTROL/$f
+            fi
+          done
+
+          cd build
+
+          echo "=== STEP 4: Create Archives with Extensive Debugging ==="
+          
+          # Create debian-binary
+          echo "2.0" > debian-binary
+          
+          # Create control archive
+          echo "Creating control.tar.gz..."
+          tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
+          echo "Control archive contents:"
+          tar -tzf control.tar.gz
+
+          # Create data archive - CRITICAL STEP
+          echo "=== CRITICAL: Data Archive Creation ==="
+          echo "Current directory: $(pwd)"
+          echo "Contents of data directory before archiving:"
+          ls -la data/
+          find data -type f -exec ls -la {} \;
+          
+          echo "Attempting to create data.tar.gz..."
+          cd data
+          echo "Now in directory: $(pwd)"
+          echo "Contents to archive:"
+          find . -type f | sort
+          
+          # Try multiple archive methods to see which works
+          echo "Method 1: tar -czf ../data.tar.gz ."
+          tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz . 2>&1 || echo "Method 1 failed"
+          
+          cd ..
+          
+          # Verify the archive was created and has content
+          if [ -f data.tar.gz ]; then
+            DATASIZE=$(stat -c%s data.tar.gz)
+            echo "Data archive size: $DATASIZE bytes"
+            
+            if [ "$DATASIZE" -lt 50 ]; then
+              echo "❌ ERROR: Archive too small, trying alternative method"
+              rm -f data.tar.gz
+              
+              # Alternative method - create from parent directory
+              tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data . 2>&1
+              DATASIZE=$(stat -c%s data.tar.gz)
+              echo "Alternative method size: $DATASIZE bytes"
+            fi
+            
+            echo "Final data archive contents:"
+            tar -tzf data.tar.gz | head -20
+            echo "File count in archive: $(tar -tzf data.tar.gz | wc -l)"
+            
+          else
+            echo "❌ CRITICAL ERROR: data.tar.gz was not created"
+            exit 1
+          fi
+
+          echo "=== STEP 5: Create IPK ==="
+          ar -cr rvi-probe_0.5.0-4_all.ipk debian-binary control.tar.gz data.tar.gz
+          
+          echo "IPK created:"
+          ls -la rvi-probe_0.5.0-4_all.ipk
+          ar -t rvi-probe_0.5.0-4_all.ipk
+
+          echo "=== STEP 6: Test IPK Locally ==="
+          mkdir -p ../test_extract
+          cd ../test_extract
+          
+          ar -x ../build/rvi-probe_0.5.0-4_all.ipk
+          echo "Extracted archives:"
+          ls -la
+          
+          echo "Testing data extraction:"
+          tar -tzf data.tar.gz | wc -l
+          echo "Files in data archive: $(tar -tzf data.tar.gz | wc -l)"
+          
+          if [ "$(tar -tzf data.tar.gz | wc -l)" -eq 0 ]; then
+            echo "❌ CRITICAL: IPK data archive is empty!"
+            exit 1
+          else
+            echo "✅ IPK data archive contains $(tar -tzf data.tar.gz | wc -l) files"
+            echo "Sample files:"
+            tar -tzf data.tar.gz | head -10
+          fi
+          
+          # Extract data to verify structure
+          mkdir -p test_data
+          tar -xzf data.tar.gz -C test_data
+          echo "Extracted file structure:"
+          find test_data -type f | head -10
+
+      - name: Create package index and upload
+        run: |
+          set -euxo pipefail
+          cd build
+          
+          SIZE=$(stat -c%s rvi-probe_0.5.0-4_all.ipk)
+          MD5=$(md5sum rvi-probe_0.5.0-4_all.ipk | cut -d' ' -f1)
+          SHA256=$(sha256sum rvi-probe_0.5.0-4_all.ipk | cut -d' ' -f1)
+          
+          cat > Packages <<EOF
+          Package: rvi-probe
+          Version: 0.5.0-4
+          Architecture: all
+          Maintainer: RVInternetHelp <support@rvinternethelp.com>
+          Section: net
+          Priority: optional
+          Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util
+          Description: RVInternetHelp Network Probe
+           Support/diagnostics agent with outage checks, speed tests,
+           Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
+          Filename: rvi-probe_0.5.0-4_all.ipk
+          Size: $SIZE
+          MD5Sum: $MD5
+          SHA256sum: $SHA256
+
+          EOF
+          
+          gzip -fk9 Packages
+          
+          # Upload to R2
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          
+          aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" \
+            --endpoint-url "$ENDPOINT" --acl public-read \
+            --content-type text/plain --cache-control 'no-cache' --metadata-directive REPLACE
+            
+          aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" \
+            --endpoint-url "$ENDPOINT" --acl public-read \
+            --content-type application/gzip --cache-control 'no-cache' --metadata-directive REPLACE
+            
+          aws s3 cp rvi-probe_0.5.0-4_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" \
+            --endpoint-url "$ENDPOINT" --acl public-read \
+            --content-type application/octet-stream --cache-control 'no-cache' --metadata-directive REPLACE
+            
+          echo "✅ Upload complete - version 0.5.0-4 ready for testing"

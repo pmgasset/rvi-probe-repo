@@ -59,7 +59,7 @@ jobs:
           # Create control file
           cat > build/CONTROL/control <<'EOC'
           Package: rvi-probe
-          Version: 0.5.0-2
+          Version: 0.5.0-3
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -104,21 +104,26 @@ jobs:
           fi
 
           # Create the IPK
-          ar -cr rvi-probe_0.5.0-2_all.ipk debian-binary control.tar.gz data.tar.gz
+          ar -cr rvi-probe_0.5.0-3_all.ipk debian-binary control.tar.gz data.tar.gz
           
-          ls -la rvi-probe_0.5.0-2_all.ipk
+          ls -la rvi-probe_0.5.0-3_all.ipk
           echo "IPK package built successfully"
 
       - name: Create package index
         run: |
           set -euxo pipefail
           cd build
-          SIZE=$(stat -c%s rvi-probe_0.5.0-2_all.ipk)
-          MD5=$(md5sum rvi-probe_0.5.0-2_all.ipk | cut -d' ' -f1)
-          SHA256=$(sha256sum rvi-probe_0.5.0-2_all.ipk | cut -d' ' -f1)
+          
+          # Get actual file stats
+          SIZE=$(stat -c%s rvi-probe_0.5.0-3_all.ipk)
+          MD5=$(md5sum rvi-probe_0.5.0-3_all.ipk | cut -d' ' -f1)
+          SHA256=$(sha256sum rvi-probe_0.5.0-3_all.ipk | cut -d' ' -f1)
+          
+          echo "IPK Stats: Size=$SIZE, MD5=$MD5, SHA256=$SHA256"
+          
           cat > Packages <<EOP
           Package: rvi-probe
-          Version: 0.5.0-2
+          Version: 0.5.0-3
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -127,11 +132,17 @@ jobs:
           Description: RVInternetHelp Network Probe
            Support/diagnostics agent with outage checks, speed tests,
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
-          Filename: rvi-probe_0.5.0-2_all.ipk
+          Filename: rvi-probe_0.5.0-3_all.ipk
           Size: $SIZE
           MD5Sum: $MD5
           SHA256sum: $SHA256
+
           EOP
+          
+          # Verify the package index is correct
+          echo "Package index created:"
+          cat Packages
+          
           gzip -fk9 Packages
 
       - name: Upload to Cloudflare R2
@@ -140,14 +151,60 @@ jobs:
           cd build
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           
-          # Upload with no-cache to ensure fresh downloads
-          aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type text/plain --cache-control 'no-store'
-          aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --cache-control 'no-store'
-          aws s3 cp rvi-probe_0.5.0-2_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --cache-control 'no-store'
+          echo "Uploading files with no-cache headers..."
+          
+          # Upload package index first, then IPK - order matters
+          aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" \
+            --endpoint-url "$ENDPOINT" --acl public-read --content-type text/plain \
+            --cache-control 'no-cache, no-store, must-revalidate' --metadata-directive REPLACE
+            
+          aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" \
+            --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip \
+            --cache-control 'no-cache, no-store, must-revalidate' --metadata-directive REPLACE
+            
+          aws s3 cp rvi-probe_0.5.0-3_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" \
+            --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream \
+            --cache-control 'no-cache, no-store, must-revalidate' --metadata-directive REPLACE
+            
+          echo "Upload complete"
 
-      - name: Verify upload
+      - name: Verify upload and checksums
         run: |
           set -euxo pipefail
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages" || echo "Package index check failed"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-2_all.ipk" || echo "IPK check failed"
-          echo "Upload complete"
+          
+          echo "Verifying uploaded files..."
+          
+          # Wait a moment for propagation
+          sleep 5
+          
+          # Download and verify the package index
+          curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/Packages" -o verify_packages.txt
+          echo "Downloaded package index:"
+          cat verify_packages.txt
+          
+          # Download and verify the IPK
+          curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-3_all.ipk" -o verify.ipk
+          
+          # Check sizes match
+          LOCAL_SIZE=$(stat -c%s build/rvi-probe_0.5.0-3_all.ipk)
+          REMOTE_SIZE=$(stat -c%s verify.ipk)
+          echo "Local IPK size: $LOCAL_SIZE bytes"
+          echo "Remote IPK size: $REMOTE_SIZE bytes"
+          
+          if [ "$LOCAL_SIZE" != "$REMOTE_SIZE" ]; then
+            echo "❌ ERROR: Size mismatch!"
+            exit 1
+          fi
+          
+          # Check checksums match
+          LOCAL_MD5=$(md5sum build/rvi-probe_0.5.0-3_all.ipk | cut -d' ' -f1)
+          REMOTE_MD5=$(md5sum verify.ipk | cut -d' ' -f1)
+          echo "Local MD5: $LOCAL_MD5"
+          echo "Remote MD5: $REMOTE_MD5"
+          
+          if [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
+            echo "❌ ERROR: Checksum mismatch!"
+            exit 1
+          fi
+          
+          echo "✅ Upload verification successful!"

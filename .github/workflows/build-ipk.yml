@@ -60,7 +60,7 @@ jobs:
           # CONTROL/control
           cat > build/CONTROL/control <<'EOC'
           Package: rvi-probe
-          Version: 0.5.0-1
+          Version: 0.5.0-2
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -95,21 +95,21 @@ jobs:
             exit 1
           fi
 
-          ar -cr rvi-probe_0.5.0-1_all.ipk debian-binary control.tar.gz data.tar.gz
-          ls -la rvi-probe_0.5.0-1_all.ipk
-          file rvi-probe_0.5.0-1_all.ipk
+          ar -cr rvi-probe_0.5.0-2_all.ipk debian-binary control.tar.gz data.tar.gz
+          ls -la rvi-probe_0.5.0-2_all.ipk
+          file rvi-probe_0.5.0-2_all.ipk
           echo "IPK package built successfully"
 
       - name: Create clean package index
         run: |
           set -euxo pipefail
           cd build
-          SIZE=$(stat -c%s rvi-probe_0.5.0-1_all.ipk)
-          MD5=$(md5sum rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
-          SHA256=$(sha256sum rvi-probe_0.5.0-1_all.ipk | cut -d' ' -f1)
+          SIZE=$(stat -c%s rvi-probe_0.5.0-2_all.ipk)
+          MD5=$(md5sum rvi-probe_0.5.0-2_all.ipk | cut -d' ' -f1)
+          SHA256=$(sha256sum rvi-probe_0.5.0-2_all.ipk | cut -d' ' -f1)
           cat > Packages <<EOP
           Package: rvi-probe
-          Version: 0.5.0-1
+          Version: 0.5.0-2
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -118,7 +118,7 @@ jobs:
           Description: RVInternetHelp Network Probe
            Support/diagnostics agent with outage checks, speed tests,
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
-          Filename: rvi-probe_0.5.0-1_all.ipk
+          Filename: rvi-probe_0.5.0-2_all.ipk
           Size: $SIZE
           MD5Sum: $MD5
           SHA256sum: $SHA256
@@ -134,7 +134,7 @@ jobs:
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type text/plain --cache-control 'no-store'
           aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --cache-control 'no-store'
-          aws s3 cp rvi-probe_0.5.0-1_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --metadata-directive REPLACE
+          aws s3 cp rvi-probe_0.5.0-2_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --cache-control 'no-store' --metadata-directive REPLACE
 
       - name: Verify upload
         if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
@@ -142,4 +142,5 @@ jobs:
           set -euxo pipefail
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages.gz"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-1_all.ipk"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-2_all.ipk" | tee /tmp/ipk_headers
+          grep -i '^cache-control: no-store' /tmp/ipk_headers

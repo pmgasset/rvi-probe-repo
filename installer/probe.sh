@@ -20,7 +20,7 @@ install_openwrt(){
   $SUDO opkg install ca-bundle ca-certificates curl jq || true
   $SUDO opkg install rvi-probe || {
     log "Falling back to direct ipk download"; ARCH=$(opkg print-architecture | tail -n1 | awk '{print $2}')
-    TMP=$(mktemp); URL="${RV_FEED_URL}/${ARCH}/rvi-probe_0.5.0-1_${ARCH}.ipk"
+    TMP=$(mktemp); URL="${RV_FEED_URL}/${ARCH}/rvi-probe_0.5.0-2_${ARCH}.ipk"
     curl -fsSL "$URL" -o "$TMP"; $SUDO opkg install "$TMP" && rm -f "$TMP"
   }
   $SUDO uci set rviprobe.config.worker_url="$RV_WORKER_URL" || true

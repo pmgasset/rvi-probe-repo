@@ -27,8 +27,8 @@ Default Worker URL: `https://status-hunter.traveldata.workers.dev/`.
 Unpack and inspect the IPK locally:
 
 ```
-ar t rvi-probe_0.5.0-1_all.ipk
-ar x rvi-probe_0.5.0-1_all.ipk
+ar t rvi-probe_0.5.0-2_all.ipk
+ar x rvi-probe_0.5.0-2_all.ipk
 tar -tzf data.tar.gz
 ```
 

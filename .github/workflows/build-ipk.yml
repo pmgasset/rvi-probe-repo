@@ -43,6 +43,10 @@ jobs:
         mv openwrt-sdk-* openwrt-sdk
         
         echo "SDK ready"
+        echo "SDK structure:"
+        ls -la openwrt-sdk/
+        echo "Scripts available:"
+        ls -la openwrt-sdk/scripts/ | head -10 || echo "Scripts directory not found"
 
     - name: Setup package in SDK
       run: |
@@ -52,6 +56,9 @@ jobs:
         # Copy our package into the SDK
         mkdir -p package/utils/rvi-probe
         cp -r ../package/rvi-probe/* package/utils/rvi-probe/
+        
+        echo "Package copied. Contents:"
+        ls -la package/utils/rvi-probe/
         
         # Update feeds (this is fast since we're not building dependencies)
         ./scripts/feeds update -a
@@ -67,10 +74,69 @@ jobs:
         # Configure for our package only (very fast)
         make defconfig
         
+        # Show the configuration to debug arch issues
+        echo "Target configuration:"
+        grep -E "(CONFIG_TARGET_|ARCH)" .config | head -5 || true
+        
         # Build just our package
         make package/rvi-probe/compile V=s
         
-        echo "Package built successfully"
+        echo "Build complete. Checking output:"
+        find bin/ -name "*.ipk" -type f || echo "No IPK files found"
+
+    - name: Create custom package index generator
+      run: |
+        set -euxo pipefail
+        cat > custom-index.sh << 'EOF'
+        #!/bin/bash
+        set -euo pipefail
+        
+        PKG_DIR=${1:-.}
+        cd "$PKG_DIR"
+        
+        echo "Generating package index for directory: $(pwd)" >&2
+        
+        for ipk in *.ipk; do
+          [ -f "$ipk" ] || continue
+          
+          echo "Processing: $ipk" >&2
+          
+          # Create temp directory for extraction
+          TMP_DIR=$(mktemp -d)
+          trap "rm -rf $TMP_DIR" EXIT
+          
+          # Extract control.tar.gz from IPK
+          if ! ar -p "$ipk" control.tar.gz | tar -xzf - -C "$TMP_DIR" 2>/dev/null; then
+            echo "Error: Failed to extract control from $ipk" >&2
+            continue
+          fi
+          
+          # Read control file
+          if [ -f "$TMP_DIR/control" ]; then
+            CONTROL_FILE="$TMP_DIR/control"
+          else
+            echo "Error: No control file found in $ipk" >&2
+            continue
+          fi
+          
+          # Calculate file metadata
+          SIZE=$(stat -c%s "$ipk")
+          MD5=$(md5sum "$ipk" | cut -d' ' -f1)
+          SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
+          
+          # Output package information (OpenWrt Packages format)
+          cat "$CONTROL_FILE"
+          echo "Filename: $ipk"
+          echo "Size: $SIZE"
+          echo "MD5Sum: $MD5"
+          echo "SHA256sum: $SHA256"
+          echo ""
+          
+          rm -rf "$TMP_DIR"
+        done
+        EOF
+        
+        chmod +x custom-index.sh
 
     - name: Generate package index
       run: |
@@ -85,6 +151,8 @@ jobs:
         PACKAGE_PATH=$(find . -name "rvi-probe*.ipk" -type f | head -1)
         if [ -z "$PACKAGE_PATH" ]; then
           echo "ERROR: No rvi-probe package found!"
+          echo "Available files in bin/packages:"
+          find . -type f || true
           exit 1
         fi
         
@@ -94,27 +162,79 @@ jobs:
         cd "$ARCH_DIR"
         
         # Verify our package exists
+        echo "Package details:"
         ls -la rvi-probe*.ipk
+        file rvi-probe*.ipk
         
-        # Generate package index using OpenWrt's script
-        ../../scripts/ipkg-make-index.sh . > Packages
+        # Try to find the OpenWrt package index script
+        SDK_ROOT="../../../"
+        INDEX_SCRIPT=""
+        
+        echo "Looking for package index scripts..."
+        if [ -f "${SDK_ROOT}scripts/ipkg-make-index.sh" ]; then
+          INDEX_SCRIPT="${SDK_ROOT}scripts/ipkg-make-index.sh"
+          echo "Found OpenWrt script: $INDEX_SCRIPT"
+        elif [ -f "${SDK_ROOT}scripts/opkg-make-index.sh" ]; then
+          INDEX_SCRIPT="${SDK_ROOT}scripts/opkg-make-index.sh"
+          echo "Found alternative script: $INDEX_SCRIPT"
+        else
+          echo "OpenWrt package script not found, using custom generator"
+          INDEX_SCRIPT="${SDK_ROOT}../../../custom-index.sh"
+        fi
+        
+        # Generate package index
+        echo "Generating package index..."
+        if [ -f "$INDEX_SCRIPT" ]; then
+          "$INDEX_SCRIPT" . > Packages
+        else
+          echo "Using fallback index generation..."
+          ${SDK_ROOT}../../../custom-index.sh . > Packages
+        fi
+        
         test -s Packages
+        echo "Generated Packages file:"
+        cat Packages
         
         # Create compressed version
         gzip -fk9 Packages
         test -s Packages.gz
         
-        echo "Package index generated"
+        echo "Package index generated successfully"
 
-    - name: Sign packages (if enabled)
+    - name: Copy to standard location
       run: |
         set -euxo pipefail
         cd openwrt-sdk/bin/packages
         
-        # Find our package directory
+        # Find our package
         PACKAGE_PATH=$(find . -name "rvi-probe*.ipk" -type f | head -1)
         ARCH_DIR=$(dirname "$PACKAGE_PATH")
+        
+        echo "Copying from $ARCH_DIR to standard 'all' location..."
+        
+        # Create the 'all' directory structure
+        mkdir -p all
+        
+        # Copy the package and rename it to use 'all' architecture if needed
         cd "$ARCH_DIR"
+        ORIGINAL_IPK=$(basename rvi-probe*.ipk)
+        
+        # Rename to use 'all' architecture instead of x86_64
+        NEW_IPK=$(echo "$ORIGINAL_IPK" | sed 's/_x86_64\.ipk$/_all.ipk/')
+        
+        echo "Copying $ORIGINAL_IPK as $NEW_IPK"
+        cp "$ORIGINAL_IPK" "../all/$NEW_IPK"
+        cp Packages "../all/"
+        cp Packages.gz "../all/"
+        [ -f Packages.sig ] && cp Packages.sig "../all/" || true
+        
+        echo "Files in all/ directory:"
+        ls -la ../all/
+
+    - name: Sign packages (if enabled)
+      run: |
+        set -euxo pipefail
+        cd openwrt-sdk/bin/packages/all
         
         if [ "${{ vars.SIGNING_ENABLED }}" = "1" ] && [ -n "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" ]; then
           echo "Signing packages..."
@@ -150,17 +270,15 @@ jobs:
         R2_BUCKET: ${{ secrets.R2_BUCKET }}
       run: |
         set -euxo pipefail
-        cd openwrt-sdk/bin/packages
+        cd openwrt-sdk/bin/packages/all
         
-        # Find our package directory
-        PACKAGE_PATH=$(find . -name "rvi-probe*.ipk" -type f | head -1)
-        ARCH_DIR=$(dirname "$PACKAGE_PATH")
-        cd "$ARCH_DIR"
+        echo "Files to upload:"
+        ls -la
         
         ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
         
         # Upload IPK package
-        aws s3 cp rvi-probe_*.ipk \
+        aws s3 cp rvi-probe_*_all.ipk \
           "s3://${R2_BUCKET}/openwrt/23.05/all/" \
           --endpoint-url "$ENDPOINT" \
           --acl public-read \
@@ -201,12 +319,20 @@ jobs:
         sleep 5
         
         echo "Verifying uploaded files..."
-        curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" | head -10 || true
+        
+        # Show what was uploaded
+        echo "Packages file content:"
+        curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" || {
+          echo "Failed to fetch Packages file"
+          exit 1
+        }
         
         # Find the local IPK file for checksum verification
-        cd openwrt-sdk/bin/packages
-        LOCAL_IPK=$(find . -name "rvi-probe*.ipk" -type f | head -1)
+        cd openwrt-sdk/bin/packages/all
+        LOCAL_IPK=$(ls rvi-probe_*_all.ipk | head -1)
         IPK_NAME=$(basename "$LOCAL_IPK")
+        
+        echo "Verifying $IPK_NAME"
         
         LOCAL_MD5=$(md5sum "$LOCAL_IPK" | cut -d' ' -f1)
         REMOTE_MD5=$(curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/$IPK_NAME" | md5sum | cut -d' ' -f1)

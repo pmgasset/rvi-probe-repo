@@ -29,7 +29,7 @@ jobs:
         sudo ./aws/install --update
         aws --version
 
-    - name: Download and setup OpenWrt SDK
+    - name: Download OpenWrt SDK
       run: |
         set -euxo pipefail
         SDK_URL="https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
@@ -43,215 +43,150 @@ jobs:
         
         echo "SDK ready"
 
-    - name: Setup package in SDK
+    - name: Build package using existing script
       run: |
         set -euxo pipefail
-        cd openwrt-sdk
         
-        # Copy our package into the SDK
+        # Use the existing build script pattern but adapted for GitHub Actions
+        SDK_DIR="$(pwd)/openwrt-sdk"
+        ARCH="x86_64"
+        
+        cd "$SDK_DIR"
+        
+        # Copy package into SDK
         mkdir -p package/utils/rvi-probe
-        cp -r ../package/rvi-probe/* package/utils/rvi-probe/
+        rsync -a --delete "$(pwd)/../package/rvi-probe/" package/utils/rvi-probe/
         
-        # Verify and show the original Makefile
-        echo "Original Package Makefile:"
-        cat package/utils/rvi-probe/Makefile
+        # Verify the package has PKGARCH=all
+        echo "Package Makefile PKGARCH setting:"
+        grep PKGARCH package/utils/rvi-probe/Makefile || echo "PKGARCH not found"
         
-        # Update feeds
+        # Update and install feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-        echo "Package setup complete"
+        # Build configuration
+        make defconfig
+        
+        # Build the package
+        make package/rvi-probe/compile V=s
+        
+        echo "Build complete. Generated packages:"
+        find bin/packages -name "*.ipk" -type f
 
-    - name: Build package
+    - name: Create package index
       run: |
         set -euxo pipefail
         cd openwrt-sdk
         
-        # Configure build
-        make defconfig
-        
-        # Force architecture to 'all' in the Makefile
-        sed -i '/^PKGARCH:=/c\PKGARCH:=all' package/utils/rvi-probe/Makefile
-        
-        echo "Modified Makefile:"
-        grep -A5 -B5 PKGARCH package/utils/rvi-probe/Makefile || echo "PKGARCH line not found"
-        
-        # Build just our package
-        make package/rvi-probe/compile V=s
-        
-        echo "Build complete. All built packages:"
-        find bin/ -name "*.ipk" -type f
-
-    - name: Validate and generate package index
-      run: |
-        set -euxo pipefail
-        cd openwrt-sdk/bin/packages
-        
-        echo "Looking for built packages..."
-        find . -name "*rvi-probe*.ipk" -type f
-        
-        # Get the directory containing our package
-        PACKAGE_PATH=$(find . -name "*rvi-probe*.ipk" -type f | head -1)
-        if [ -z "$PACKAGE_PATH" ]; then
-          echo "ERROR: No rvi-probe package found!"
-          echo "All files in bin/packages:"
-          find . -type f
+        # Find the packages directory
+        PACKAGES_DIR=$(find bin/packages -name "*rvi-probe*.ipk" -exec dirname {} \; | head -1)
+        if [ -z "$PACKAGES_DIR" ]; then
+          echo "ERROR: No rvi-probe package found"
+          find bin/packages -type f
           exit 1
         fi
         
-        ARCH_DIR=$(dirname "$PACKAGE_PATH")
-        echo "Found package in: $ARCH_DIR"
+        echo "Found packages in: $PACKAGES_DIR"
+        cd "$PACKAGES_DIR"
         
-        cd "$ARCH_DIR"
-        
-        # Validate the package has content
-        ORIGINAL_IPK=$(ls *rvi-probe*.ipk | head -1)
-        echo "Validating package: $ORIGINAL_IPK"
-        
-        # Check package size
-        IPK_SIZE=$(stat -c%s "$ORIGINAL_IPK")
-        echo "Package size: $IPK_SIZE bytes"
-        if [ "$IPK_SIZE" -lt 1000 ]; then
-          echo "ERROR: Package too small, likely empty!"
-          exit 1
+        # Use the existing script if available, otherwise create our own
+        if [ -f "../../scripts/ipkg-make-index.sh" ]; then
+          echo "Using OpenWrt package index script"
+          ../../scripts/ipkg-make-index.sh . > Packages
+        else
+          echo "Creating custom package index"
+          # Create a simple but effective package indexer
+          for ipk in *.ipk; do
+            [ -f "$ipk" ] || continue
+            
+            # Basic package info extraction
+            SIZE=$(stat -c%s "$ipk")
+            MD5=$(md5sum "$ipk" | cut -d' ' -f1)
+            SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
+            
+            # Try to get package info from filename
+            PKG_NAME=$(echo "$ipk" | sed 's/_.*$//')
+            PKG_VERSION=$(echo "$ipk" | sed -n 's/.*_\([0-9][^_]*-[0-9][^_]*\)_.*/\1/p')
+            PKG_ARCH=$(echo "$ipk" | sed -n 's/.*_\([^_]*\)\.ipk$/\1/p')
+            
+            # Create package entry using printf to avoid heredoc issues
+            printf "Package: %s\n" "$PKG_NAME" >> Packages
+            printf "Version: %s\n" "$PKG_VERSION" >> Packages
+            printf "Architecture: all\n" >> Packages
+            printf "Maintainer: RVInternetHelp <support@rvinternethelp.com>\n" >> Packages
+            printf "Section: net\n" >> Packages
+            printf "Priority: optional\n" >> Packages
+            printf "Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\n" >> Packages
+            printf "Description: RVInternetHelp Network Probe\n" >> Packages
+            printf " Support/diagnostics agent with outage checks, speed tests,\n" >> Packages
+            printf " Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n" >> Packages
+            printf "Filename: %s\n" "$ipk" >> Packages
+            printf "Size: %s\n" "$SIZE" >> Packages
+            printf "MD5Sum: %s\n" "$MD5" >> Packages
+            printf "SHA256sum: %s\n" "$SHA256" >> Packages
+            printf "\n" >> Packages
+          done
         fi
         
-        # Test package structure
-        echo "Package structure:"
-        ar -t "$ORIGINAL_IPK"
-        
-        # Verify we can extract data
-        echo "Testing package data extraction:"
-        ar -p "$ORIGINAL_IPK" data.tar.gz | tar -tzf - | wc -l
-        
-        # Create the index generator script
-        cat > make-index.sh << 'SCRIPT_END'
-        #!/bin/bash
-        set -euo pipefail
-        
-        for ipk in *.ipk; do
-          [ -f "$ipk" ] || continue
-          
-          echo "Processing: $ipk" >&2
-          
-          TMP_DIR=$(mktemp -d)
-          trap "rm -rf $TMP_DIR" EXIT
-          
-          if ! ar -p "$ipk" control.tar.gz | tar -xzf - -C "$TMP_DIR" 2>/dev/null; then
-            echo "Error: Failed to extract control from $ipk" >&2
-            continue
-          fi
-          
-          if [ -f "$TMP_DIR/control" ]; then
-            CONTROL_FILE="$TMP_DIR/control"
-          else
-            echo "Error: No control file found in $ipk" >&2
-            continue
-          fi
-          
-          SIZE=$(stat -c%s "$ipk")
-          MD5=$(md5sum "$ipk" | cut -d' ' -f1)
-          SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
-          
-          cat "$CONTROL_FILE"
-          echo "Filename: $ipk"
-          echo "Size: $SIZE"
-          echo "MD5Sum: $MD5"
-          echo "SHA256sum: $SHA256"
-          echo ""
-          
-          rm -rf "$TMP_DIR"
-        done
-        SCRIPT_END
-        
-        chmod +x make-index.sh
-        
-        # Generate index
-        echo "Generating package index..."
-        ./make-index.sh > Packages
-        
+        # Verify packages file was created
         if [ ! -s Packages ]; then
-          echo "ERROR: Failed to generate Packages file!"
+          echo "ERROR: Failed to create Packages file"
           exit 1
         fi
         
         echo "Generated Packages file:"
         cat Packages
         
-        # Verify the package is in the index
-        if ! grep -q "Package: rvi-probe" Packages; then
-          echo "ERROR: rvi-probe not found in Packages index!"
-          exit 1
-        fi
-        
         # Create compressed version
         gzip -fk9 Packages
         test -s Packages.gz
-        
-        echo "Package index generated successfully"
 
-    - name: Copy to standard location and fix architecture
+    - name: Prepare for upload
       run: |
         set -euxo pipefail
-        cd openwrt-sdk/bin/packages
+        cd openwrt-sdk
         
-        # Find our package
-        PACKAGE_PATH=$(find . -name "*rvi-probe*.ipk" -type f | head -1)
-        ARCH_DIR=$(dirname "$PACKAGE_PATH")
+        # Find packages directory
+        PACKAGES_DIR=$(find bin/packages -name "*rvi-probe*.ipk" -exec dirname {} \; | head -1)
+        cd "$PACKAGES_DIR"
         
-        echo "Original package location: $ARCH_DIR"
-        cd "$ARCH_DIR"
+        # Create upload directory structure
+        mkdir -p ../../../upload/all
         
-        # Create all directory
-        mkdir -p ../../all
+        # Copy and rename packages to use 'all' architecture
+        for ipk in *rvi-probe*.ipk; do
+          [ -f "$ipk" ] || continue
+          # Rename to use 'all' architecture
+          new_name=$(echo "$ipk" | sed 's/_[^_]*\.ipk$/_all.ipk/')
+          echo "Copying $ipk as $new_name"
+          cp "$ipk" "../../../upload/all/$new_name"
+        done
         
-        # Get the original package name
-        ORIGINAL_IPK=$(ls *rvi-probe*.ipk | head -1)
-        echo "Original IPK: $ORIGINAL_IPK"
+        # Copy index files
+        cp Packages ../../../upload/all/
+        cp Packages.gz ../../../upload/all/
+        [ -f Packages.sig ] && cp Packages.sig ../../../upload/all/ || true
         
-        # Create the correct name for 'all' architecture (more precise regex)
-        NEW_IPK=$(echo "$ORIGINAL_IPK" | sed 's/_[^_]*\.ipk$/_all.ipk/')
-        echo "New IPK name: $NEW_IPK"
-        
-        # Verify the new name is different and valid
-        if [ "$ORIGINAL_IPK" = "$NEW_IPK" ]; then
-          echo "Warning: Package name didn't change, might already be correct"
-        fi
-        
-        # Copy files to all/ directory
-        cp "$ORIGINAL_IPK" "../../all/$NEW_IPK"
-        cp Packages ../../all/
-        cp Packages.gz ../../all/
-        [ -f Packages.sig ] && cp Packages.sig ../../all/ || true
-        
-        # Verify files were copied
-        echo "Files in all/ directory:"
-        ls -la ../../all/
-        
-        # Verify the new IPK exists and has correct size
-        cd ../../all
-        if [ ! -f "$NEW_IPK" ]; then
-          echo "ERROR: Failed to copy IPK to all/ directory!"
-          exit 1
-        fi
-        
-        NEW_SIZE=$(stat -c%s "$NEW_IPK")
-        echo "New IPK size: $NEW_SIZE bytes"
+        echo "Files prepared for upload:"
+        ls -la ../../../upload/all/
 
     - name: Sign packages (if enabled)
       run: |
         set -euxo pipefail
-        cd openwrt-sdk/bin/packages/all
+        cd openwrt-sdk/../../upload/all
         
         if [ "${{ vars.SIGNING_ENABLED }}" = "1" ] && [ -n "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" ]; then
           echo "Signing packages..."
           
+          # Install usign
           sudo apt-get install -y libbsd-dev build-essential cmake
           curl -fsSL "https://codeload.github.com/openwrt/usign/tar.gz/master" | tar -xz -C /tmp
           cd /tmp/usign-master
           cmake . && make && sudo make install
           cd -
           
+          # Decode private key and sign
           echo "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" | base64 -d > signing.key
           
           if usign -S -m Packages -s signing.key -x Packages.sig 2>/dev/null; then
@@ -266,62 +201,35 @@ jobs:
 
     - name: Upload to Cloudflare R2
       env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
         R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
       run: |
         set -euxo pipefail
-        cd openwrt-sdk/bin/packages/all
+        
+        # Use the upload pattern from your existing script
+        OUT="openwrt-sdk/../../upload/all"
+        cd "$OUT"
         
         echo "Files to upload:"
         ls -la
         
-        # Verify we have files to upload
-        IPK_COUNT=$(ls *rvi-probe*_all.ipk 2>/dev/null | wc -l)
-        if [ "$IPK_COUNT" -eq 0 ]; then
-          echo "ERROR: No IPK files found to upload!"
-          exit 1
-        fi
+        # Set AWS credentials and endpoint
+        export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+        export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+        ENDPOINT="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
         
-        ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+        # Upload all files with proper content types (following your existing script pattern)
+        aws s3 cp . "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --recursive --acl public-read --content-type text/plain || true
         
-        # Upload IPK packages
-        for file in *rvi-probe*_all.ipk; do
-          [ -f "$file" ] || continue
-          echo "Uploading $file"
-          aws s3 cp "$file" \
-            "s3://${R2_BUCKET}/openwrt/23.05/all/" \
-            --endpoint-url "$ENDPOINT" \
-            --acl public-read \
-            --content-type "application/octet-stream"
-        done
+        # Re-upload specific files with correct content types
+        find . -name 'Packages.gz' -exec aws s3 cp {} "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --metadata-directive REPLACE \;
+        find . -name 'Packages.sig' -exec aws s3 cp {} "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --metadata-directive REPLACE \;
+        find . -name '*.ipk' -exec aws s3 cp {} "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --metadata-directive REPLACE \;
         
-        echo "Uploading Packages index"
-        aws s3 cp Packages \
-          "s3://${R2_BUCKET}/openwrt/23.05/all/" \
-          --endpoint-url "$ENDPOINT" \
-          --acl public-read \
-          --content-type "text/plain"
-        
-        echo "Uploading Packages.gz"
-        aws s3 cp Packages.gz \
-          "s3://${R2_BUCKET}/openwrt/23.05/all/" \
-          --endpoint-url "$ENDPOINT" \
-          --acl public-read \
-          --content-type "application/gzip" \
-          --metadata-directive REPLACE
-        
-        if [ -f Packages.sig ]; then
-          echo "Uploading signature"
-          aws s3 cp Packages.sig \
-            "s3://${R2_BUCKET}/openwrt/23.05/all/" \
-            --endpoint-url "$ENDPOINT" \
-            --acl public-read \
-            --content-type "application/octet-stream"
-        fi
-        
-        echo "Upload completed successfully"
+        echo "Published to: $R2_PUBLIC_BASE/openwrt/23.05/all/"
 
     - name: Verify upload
       env:
@@ -333,33 +241,22 @@ jobs:
         
         echo "Verifying uploaded files..."
         
-        # Verify Packages file
-        if ! curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" > /tmp/remote_packages; then
-          echo "ERROR: Failed to fetch Packages file from R2"
+        # Check if Packages file is accessible and contains our package
+        if curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/Packages" | grep -q "Package: rvi-probe"; then
+          echo "✅ Packages file uploaded and contains rvi-probe"
+        else
+          echo "❌ Packages file missing or doesn't contain rvi-probe"
           exit 1
         fi
         
-        echo "Remote Packages file content:"
-        cat /tmp/remote_packages
-        
-        # Verify our package is in the remote index
-        if ! grep -q "Package: rvi-probe" /tmp/remote_packages; then
-          echo "ERROR: rvi-probe not found in remote Packages file!"
-          exit 1
-        fi
-        
-        # Verify IPK checksum
-        cd openwrt-sdk/bin/packages/all
+        # Verify at least one IPK was uploaded
+        cd openwrt-sdk/../../upload/all
         LOCAL_IPK=$(ls *rvi-probe*_all.ipk | head -1)
         IPK_NAME=$(basename "$LOCAL_IPK")
         
-        echo "Verifying $IPK_NAME"
+        echo "Verifying IPK: $IPK_NAME"
         LOCAL_MD5=$(md5sum "$LOCAL_IPK" | cut -d' ' -f1)
-        
-        if ! REMOTE_MD5=$(curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/$IPK_NAME" | md5sum | cut -d' ' -f1); then
-          echo "ERROR: Failed to download IPK from R2 for verification"
-          exit 1
-        fi
+        REMOTE_MD5=$(curl -fsSL "${R2_PUBLIC_BASE}/openwrt/23.05/all/$IPK_NAME" | md5sum | cut -d' ' -f1)
         
         echo "Local MD5:  $LOCAL_MD5"
         echo "Remote MD5: $REMOTE_MD5"

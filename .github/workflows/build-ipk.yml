@@ -30,18 +30,14 @@ jobs:
       - name: Create IPK package manually
         run: |
           set -euxo pipefail
-
           mkdir -p build/{CONTROL,data}
-
           # Copy from a rootfs-style folder
           if [ ! -d package/rvi-probe/root ]; then
             echo "ERROR: package/rvi-probe/root does not exist. Add your files here (etc/, usr/, www/, ...)."
             exit 1
           fi
-
           # Copy while preserving perms/exec bits
           rsync -a package/rvi-probe/root/ build/data/
-
           # Sanity check: ensure at least 1 regular file
           FILECOUNT=$(find build/data -type f | wc -l | tr -d ' ')
           if [ "$FILECOUNT" -lt 1 ]; then
@@ -49,14 +45,12 @@ jobs:
             find package/rvi-probe -maxdepth 3 -print
             exit 1
           fi
-
           # Ensure common script paths are executable (idempotent)
           find build/data -path "*/bin/*" -type f -exec chmod 755 {} +
           find build/data -path "*/sbin/*" -type f -exec chmod 755 {} +
           find build/data -path "*/init.d/*" -type f -exec chmod 755 {} +
           find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} +
           find build/data -name "*.sh" -type f -exec chmod 755 {} +
-
           # CONTROL/control
           cat > build/CONTROL/control <<'EOC'
           Package: rvi-probe
@@ -70,31 +64,26 @@ jobs:
            Support/diagnostics agent with outage checks, speed tests,
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
           EOC
-
           # Optional maintainer scripts (if present)
           for f in preinst postinst prerm postrm; do
             if [ -f package/rvi-probe/CONTROL/$f ]; then
               install -m 755 package/rvi-probe/CONTROL/$f build/CONTROL/$f
             fi
           done
-
           cd build
-
           echo "2.0" > debian-binary
-          tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
-          tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data .
-
+          # Corrected tar commands below: using * instead of .
+          tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL *
+          tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data *
           # EXTRA VALIDATION: list contents
           echo "=== control.tar.gz ==="; tar -tzf control.tar.gz
           echo "=== data.tar.gz (should list your files) ==="; tar -tzf data.tar.gz
-
           # Fail if data archive is tiny
           DATASIZE=$(stat -c%s data.tar.gz)
           if [ "$DATASIZE" -lt 100 ]; then
             echo "ERROR: data.tar.gz is too small; likely empty."
             exit 1
           fi
-
           ar -cr rvi-probe_0.5.0-2_all.ipk debian-binary control.tar.gz data.tar.gz
           ls -la rvi-probe_0.5.0-2_all.ipk
           file rvi-probe_0.5.0-2_all.ipk

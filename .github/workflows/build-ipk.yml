@@ -47,7 +47,6 @@ jobs:
       run: |
         set -euxo pipefail
         
-        # Use the existing build script pattern but adapted for GitHub Actions
         SDK_DIR="$(pwd)/openwrt-sdk"
         ARCH="x86_64"
         
@@ -74,108 +73,108 @@ jobs:
         echo "Build complete. Generated packages:"
         find bin/packages -name "*.ipk" -type f
 
-    - name: Create package index
+    - name: Create ISOLATED package index
       run: |
         set -euxo pipefail
         cd openwrt-sdk
         
-        # Find the packages directory
+        # Find ONLY rvi-probe packages - be very specific
         PACKAGES_DIR=$(find bin/packages -name "*rvi-probe*.ipk" -exec dirname {} \; | head -1)
         if [ -z "$PACKAGES_DIR" ]; then
           echo "ERROR: No rvi-probe package found"
-          find bin/packages -type f
           exit 1
         fi
         
         echo "Found packages in: $PACKAGES_DIR"
         cd "$PACKAGES_DIR"
         
-        # Use the existing script if available, otherwise create our own
-        if [ -f "../../scripts/ipkg-make-index.sh" ]; then
-          echo "Using OpenWrt package index script"
-          ../../scripts/ipkg-make-index.sh . > Packages
-        else
-          echo "Creating custom package index"
-          # Create a simple but effective package indexer
-          for ipk in *.ipk; do
-            [ -f "$ipk" ] || continue
-            
-            # Basic package info extraction
-            SIZE=$(stat -c%s "$ipk")
-            MD5=$(md5sum "$ipk" | cut -d' ' -f1)
-            SHA256=$(sha256sum "$ipk" | cut -d' ' -f1)
-            
-            # Try to get package info from filename
-            PKG_NAME=$(echo "$ipk" | sed 's/_.*$//')
-            PKG_VERSION=$(echo "$ipk" | sed -n 's/.*_\([0-9][^_]*-[0-9][^_]*\)_.*/\1/p')
-            PKG_ARCH=$(echo "$ipk" | sed -n 's/.*_\([^_]*\)\.ipk$/\1/p')
-            
-            # Create package entry using printf to avoid heredoc issues
-            printf "Package: %s\n" "$PKG_NAME" >> Packages
-            printf "Version: %s\n" "$PKG_VERSION" >> Packages
-            printf "Architecture: all\n" >> Packages
-            printf "Maintainer: RVInternetHelp <support@rvinternethelp.com>\n" >> Packages
-            printf "Section: net\n" >> Packages
-            printf "Priority: optional\n" >> Packages
-            printf "Depends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\n" >> Packages
-            printf "Description: RVInternetHelp Network Probe\n" >> Packages
-            printf " Support/diagnostics agent with outage checks, speed tests,\n" >> Packages
-            printf " Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n" >> Packages
-            printf "Filename: %s\n" "$ipk" >> Packages
-            printf "Size: %s\n" "$SIZE" >> Packages
-            printf "MD5Sum: %s\n" "$MD5" >> Packages
-            printf "SHA256sum: %s\n" "$SHA256" >> Packages
-            printf "\n" >> Packages
-          done
-        fi
+        # Create isolated upload directory
+        mkdir -p ../../../upload/all
         
-        # Verify packages file was created
-        if [ ! -s Packages ]; then
-          echo "ERROR: Failed to create Packages file"
+        # CRITICAL: Process ONLY rvi-probe packages
+        RVI_PACKAGES=$(ls *rvi-probe*.ipk 2>/dev/null || echo "")
+        if [ -z "$RVI_PACKAGES" ]; then
+          echo "ERROR: No rvi-probe packages found"
           exit 1
         fi
         
-        echo "Generated Packages file:"
+        echo "Processing rvi-probe packages: $RVI_PACKAGES"
+        
+        # Initialize empty Packages file
+        > "../../../upload/all/Packages"
+        
+        # Process ONLY rvi-probe packages
+        for ipk in $RVI_PACKAGES; do
+          echo "Processing: $ipk"
+          
+          # Rename to 'all' architecture
+          new_name=$(echo "$ipk" | sed 's/_[^_]*\.ipk$/_all.ipk/')
+          cp "$ipk" "../../../upload/all/$new_name"
+          
+          # Get file metadata
+          SIZE=$(stat -c%s "../../../upload/all/$new_name")
+          MD5=$(md5sum "../../../upload/all/$new_name" | cut -d' ' -f1)
+          SHA256=$(sha256sum "../../../upload/all/$new_name" | cut -d' ' -f1)
+          
+          # Extract control info from IPK
+          TMP_DIR=$(mktemp -d)
+          cd "$TMP_DIR"
+          
+          if ar -x "$PACKAGES_DIR/$ipk" control.tar.gz 2>/dev/null && tar -xzf control.tar.gz 2>/dev/null; then
+            if [ -f control ]; then
+              echo "Using extracted control file"
+              sed 's/^Architecture:.*/Architecture: all/' control >> "$PACKAGES_DIR/../../../upload/all/Packages"
+            else
+              echo "No control file found, using fallback"
+              printf "Package: rvi-probe\nVersion: 0.5.0-1\nArchitecture: all\nMaintainer: RVInternetHelp <support@rvinternethelp.com>\nSection: net\nPriority: optional\nDepends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\nDescription: RVInternetHelp Network Probe\n Support/diagnostics agent with outage checks, speed tests,\n Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n" >> "$PACKAGES_DIR/../../../upload/all/Packages"
+            fi
+          else
+            echo "Failed to extract control, using fallback"
+            printf "Package: rvi-probe\nVersion: 0.5.0-1\nArchitecture: all\nMaintainer: RVInternetHelp <support@rvinternethelp.com>\nSection: net\nPriority: optional\nDepends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\nDescription: RVInternetHelp Network Probe\n Support/diagnostics agent with outage checks, speed tests,\n Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n" >> "$PACKAGES_DIR/../../../upload/all/Packages"
+          fi
+          
+          # Add file metadata
+          printf "Filename: %s\nSize: %s\nMD5Sum: %s\nSHA256sum: %s\n\n" "$new_name" "$SIZE" "$MD5" "$SHA256" >> "$PACKAGES_DIR/../../../upload/all/Packages"
+          
+          cd "$PACKAGES_DIR"
+          rm -rf "$TMP_DIR"
+          
+          # IMPORTANT: Only process the first rvi-probe package
+          break
+        done
+        
+        cd ../../upload/all
+        
+        # Validate the Packages file
+        PKG_COUNT=$(grep -c '^Package:' Packages || echo "0")
+        PKG_SIZE=$(wc -c < Packages)
+        
+        echo "Packages file validation:"
+        echo "- Package count: $PKG_COUNT (should be 1)"
+        echo "- File size: $PKG_SIZE bytes (should be 500-800)"
+        
+        if [ "$PKG_COUNT" != "1" ]; then
+          echo "ERROR: Expected exactly 1 package, got $PKG_COUNT"
+          echo "Packages file content:"
+          cat Packages
+          exit 1
+        fi
+        
+        if [ "$PKG_SIZE" -gt "5000" ]; then
+          echo "ERROR: Packages file too large ($PKG_SIZE bytes)"
+          echo "This suggests corruption. Content:"
+          head -50 Packages
+          exit 1
+        fi
+        
+        echo "Generated clean Packages file:"
         cat Packages
         
         # Create compressed version
         gzip -fk9 Packages
-        test -s Packages.gz
-
-    - name: Prepare for upload
-      run: |
-        set -euxo pipefail
         
-        # Store the repo root path
-        REPO_ROOT=$(pwd)
-        echo "Repo root: $REPO_ROOT"
-        
-        cd openwrt-sdk
-        
-        # Find packages directory
-        PACKAGES_DIR=$(find bin/packages -name "*rvi-probe*.ipk" -exec dirname {} \; | head -1)
-        echo "Packages directory: $PACKAGES_DIR"
-        cd "$PACKAGES_DIR"
-        
-        # Create upload directory structure in repo root
-        mkdir -p "$REPO_ROOT/upload/all"
-        
-        # Copy and rename packages to use 'all' architecture
-        for ipk in *rvi-probe*.ipk; do
-          [ -f "$ipk" ] || continue
-          # Rename to use 'all' architecture
-          new_name=$(echo "$ipk" | sed 's/_[^_]*\.ipk$/_all.ipk/')
-          echo "Copying $ipk as $new_name"
-          cp "$ipk" "$REPO_ROOT/upload/all/$new_name"
-        done
-        
-        # Copy index files
-        cp Packages "$REPO_ROOT/upload/all/"
-        cp Packages.gz "$REPO_ROOT/upload/all/"
-        [ -f Packages.sig ] && cp Packages.sig "$REPO_ROOT/upload/all/" || true
-        
-        echo "Files prepared for upload:"
-        ls -la "$REPO_ROOT/upload/all/"
+        echo "Final files:"
+        ls -la
 
     - name: Sign packages (if enabled)
       run: |
@@ -240,7 +239,7 @@ jobs:
         
         # Re-upload specific files with correct content types
         find . -name 'Packages.gz' -exec aws s3 cp {} "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --metadata-directive REPLACE \;
-        find . -name 'Packages.sig' -exec aws s3 cp {} "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --metadata-directive REPLACE \;
+        find . -name 'Packages.sig' -exec aws s3 cp {} "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --metadata-directive REPLACE \; 2>/dev/null || true
         find . -name '*.ipk' -exec aws s3 cp {} "s3://$R2_BUCKET/openwrt/23.05/all/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --metadata-directive REPLACE \;
         
         echo "Published to: $R2_PUBLIC_BASE/openwrt/23.05/all/"

@@ -33,13 +33,13 @@ jobs:
 
           mkdir -p build/{CONTROL,data}
 
-          # Copy files - use the files/ directory that matches your Makefile
-          echo "Copying files from package/rvi-probe/files/"
-          cp -r package/rvi-probe/files/* build/data/
+          # Copy files - EXCLUDE CONTROL directory from data
+          echo "Copying files from package/rvi-probe/files/ (excluding CONTROL)"
+          find package/rvi-probe/files -maxdepth 1 -mindepth 1 -not -name CONTROL -exec cp -r {} build/data/ \;
 
           # Verify files were copied
           FILECOUNT=$(find build/data -type f | wc -l)
-          echo "Files copied: $FILECOUNT"
+          echo "Files copied to data: $FILECOUNT"
           find build/data -type f | head -10
 
           if [ "$FILECOUNT" -lt 1 ]; then
@@ -89,14 +89,14 @@ jobs:
           
           # Change to data directory and create archive from there
           cd data
-          tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz *
+          tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz .
           cd ..
 
           # Verify data archive is not empty
           DATASIZE=$(stat -c%s data.tar.gz)
           echo "Data archive size: $DATASIZE bytes"
-          echo "Data archive contents:"
-          tar -tzf data.tar.gz | head -10
+          echo "First 10 files in data archive:"
+          tar -tzf data.tar.gz | head -10 || true
 
           if [ "$DATASIZE" -lt 50 ]; then
             echo "ERROR: data.tar.gz is too small"

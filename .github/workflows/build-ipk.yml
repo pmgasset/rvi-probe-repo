@@ -145,14 +145,20 @@ jobs:
     - name: Prepare for upload
       run: |
         set -euxo pipefail
+        
+        # Store the repo root path
+        REPO_ROOT=$(pwd)
+        echo "Repo root: $REPO_ROOT"
+        
         cd openwrt-sdk
         
         # Find packages directory
         PACKAGES_DIR=$(find bin/packages -name "*rvi-probe*.ipk" -exec dirname {} \; | head -1)
+        echo "Packages directory: $PACKAGES_DIR"
         cd "$PACKAGES_DIR"
         
-        # Create upload directory structure (relative to repo root)
-        mkdir -p ../../../../upload/all
+        # Create upload directory structure in repo root
+        mkdir -p "$REPO_ROOT/upload/all"
         
         # Copy and rename packages to use 'all' architecture
         for ipk in *rvi-probe*.ipk; do
@@ -160,16 +166,16 @@ jobs:
           # Rename to use 'all' architecture
           new_name=$(echo "$ipk" | sed 's/_[^_]*\.ipk$/_all.ipk/')
           echo "Copying $ipk as $new_name"
-          cp "$ipk" "../../../../upload/all/$new_name"
+          cp "$ipk" "$REPO_ROOT/upload/all/$new_name"
         done
         
         # Copy index files
-        cp Packages ../../../../upload/all/
-        cp Packages.gz ../../../../upload/all/
-        [ -f Packages.sig ] && cp Packages.sig ../../../../upload/all/ || true
+        cp Packages "$REPO_ROOT/upload/all/"
+        cp Packages.gz "$REPO_ROOT/upload/all/"
+        [ -f Packages.sig ] && cp Packages.sig "$REPO_ROOT/upload/all/" || true
         
         echo "Files prepared for upload:"
-        ls -la ../../../../upload/all/
+        ls -la "$REPO_ROOT/upload/all/"
 
     - name: Sign packages (if enabled)
       run: |
@@ -178,6 +184,8 @@ jobs:
         # Check if upload directory exists
         if [ ! -d "upload/all" ]; then
           echo "ERROR: Upload directory not found"
+          ls -la upload/ 2>/dev/null || echo "upload/ directory doesn't exist"
+          ls -la . | head -10
           exit 1
         fi
         

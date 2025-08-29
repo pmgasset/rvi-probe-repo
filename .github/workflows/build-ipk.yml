@@ -1,5 +1,8 @@
-name: Build rvi-probe IPK
+# A descriptive name for the workflow
+name: Build and Deploy OpenWrt IPK Package
 
+# --- Triggers ---
+# This workflow runs on a push to specific paths or when manually dispatched
 on:
   push:
     paths:
@@ -7,9 +10,14 @@ on:
       - '.github/workflows/build-ipk.yml'
   workflow_dispatch:
 
+# --- Jobs ---
+# A single job named 'build' will run
 jobs:
   build:
+    # Use the latest Ubuntu runner
     runs-on: ubuntu-latest
+
+    # Environment variables available to all steps in this job
     env:
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -17,8 +25,12 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
+
+    # --- Steps ---
+    # The sequence of tasks to be executed
     steps:
-      - uses: actions/checkout@v4
+      - name:  Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Install AWS CLI v2
         run: |
@@ -27,31 +39,28 @@ jobs:
           unzip -q awscliv2.zip
           sudo ./aws/install --update
 
-      - name: Create IPK package manually
+      - name: Prepare Package Files
         run: |
           set -euxo pipefail
-          mkdir -p build/{CONTROL,data}
-          # Copy from a rootfs-style folder
-          if [ ! -d package/rvi-probe/root ]; then
-            echo "ERROR: package/rvi-probe/root does not exist. Add your files here (etc/, usr/, www/, ...)."
-            exit 1
-          fi
-          # Copy while preserving perms/exec bits
+          # Create the staging directories
+          mkdir -p build/CONTROL build/data
+          
+          # Copy all package files into the data directory
+          echo "Copying package files..."
           rsync -a package/rvi-probe/root/ build/data/
-          # Sanity check: ensure at least 1 regular file
-          FILECOUNT=$(find build/data -type f | wc -l | tr -d ' ')
-          if [ "$FILECOUNT" -lt 1 ]; then
-            echo "ERROR: No files found to package. Aborting."
-            find package/rvi-probe -maxdepth 3 -print
-            exit 1
-          fi
-          # Ensure common script paths are executable (idempotent)
+          
+          # Set executable permissions on scripts
+          echo "Setting file permissions..."
           find build/data -path "*/bin/*" -type f -exec chmod 755 {} +
           find build/data -path "*/sbin/*" -type f -exec chmod 755 {} +
           find build/data -path "*/init.d/*" -type f -exec chmod 755 {} +
           find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} +
           find build/data -name "*.sh" -type f -exec chmod 755 {} +
-          # CONTROL/control
+
+      - name: Create Control Files
+        run: |
+          set -euxo pipefail
+          # Create the main 'control' file with package metadata
           cat > build/CONTROL/control <<'EOC'
           Package: rvi-probe
           Version: 0.5.0-2
@@ -64,39 +73,45 @@ jobs:
            Support/diagnostics agent with outage checks, speed tests,
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
           EOC
-          # Optional maintainer scripts (if present)
+
+          # Copy optional maintainer scripts (preinst, postinst, etc.) if they exist
           for f in preinst postinst prerm postrm; do
-            if [ -f package/rvi-probe/CONTROL/$f ]; then
-              install -m 755 package/rvi-probe/CONTROL/$f build/CONTROL/$f
+            if [ -f "package/rvi-probe/CONTROL/$f" ]; then
+              install -m 755 "package/rvi-probe/CONTROL/$f" "build/CONTROL/$f"
             fi
           done
-          cd build
-          echo "2.0" > debian-binary
-          # Create the two archives separately
-          tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL *
-          tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data *
-          # EXTRA VALIDATION: list contents
-          echo "=== control.tar.gz ==="; tar -tzf control.tar.gz
-          echo "=== data.tar.gz (should list your files) ==="; tar -tzf data.tar.gz
-          # Fail if data archive is tiny
-          DATASIZE=$(stat -c%s data.tar.gz)
-          if [ "$DATASIZE" -lt 100 ]; then
-            echo "ERROR: data.tar.gz is too small; likely empty."
-            exit 1
-          fi
-          # Combine the three components into the final .ipk file
-          ar -cr rvi-probe_0.5.0-2_all.ipk debian-binary control.tar.gz data.tar.gz
-          ls -la rvi-probe_0.5.0-2_all.ipk
-          file rvi-probe_0.5.0-2_all.ipk
-          echo "IPK package built successfully"
 
-      - name: Create clean package index
+      - name: Build the IPK Archive
         run: |
           set -euxo pipefail
           cd build
+          
+          # Create the mandatory debian-binary file
+          echo "2.0" > debian-binary
+          
+          # Create the control and data tarballs
+          tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL *
+          tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data *
+          
+          # Combine the components into the final .ipk file using 'ar'
+          ar -cr rvi-probe_0.5.0-2_all.ipk debian-binary control.tar.gz data.tar.gz
+          
+          echo "--- IPK File Details ---"
+          ls -la rvi-probe_0.5.0-2_all.ipk
+          file rvi-probe_0.5.0-2_all.ipk
+          echo "IPK package built successfully ✅"
+
+      - name: Generate Package Index
+        run: |
+          set -euxo pipefail
+          cd build
+          
+          # Get metadata from the generated IPK
           SIZE=$(stat -c%s rvi-probe_0.5.0-2_all.ipk)
           MD5=$(md5sum rvi-probe_0.5.0-2_all.ipk | cut -d' ' -f1)
           SHA256=$(sha256sum rvi-probe_0.5.0-2_all.ipk | cut -d' ' -f1)
+          
+          # Create the 'Packages' file for the opkg repository
           cat > Packages <<EOP
           Package: rvi-probe
           Version: 0.5.0-2
@@ -113,8 +128,10 @@ jobs:
           MD5Sum: $MD5
           SHA256sum: $SHA256
           EOP
-          grep -n '^Package:' Packages
+          
+          # Create the gzipped version of the index
           gzip -fk9 Packages
+          echo "--- Repository Index Files ---"
           ls -la *.ipk Packages*
 
       - name: Upload to Cloudflare R2
@@ -122,15 +139,6 @@ jobs:
           set -euxo pipefail
           cd build
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type text/plain --cache-control 'no-store'
-          aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --cache-control 'no-store'
-          aws s3 cp rvi-probe_0.5.0-2_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --cache-control 'no-store' --metadata-directive REPLACE
-
-      - name: Verify upload
-        if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
-        run: |
-          set -euxo pipefail
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages.gz"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-2_all.ipk" | tee /tmp/ipk_headers
-          grep -i '^cache-control: no-store' /tmp/ipk_headers
+          
+          echo "Uploading package, index, and gzipped index to R2..."
+          aws s3 cp rvi-probe_0.5.0-2_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT"

@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+CODE=$(head -c 6 /dev/urandom | base64 | tr -dc 'A-HJ-NP-Z2-9' | head -c 6)
+URL=$(uci -q get rviprobe.config.worker_url)
+[ -n "$URL" ] && curl -fsS -X POST -H 'Content-Type: application/json' -d "{\"share_code\":\"$CODE\",\"host\":\"$(hostname)\"}" "$URL?fn=share" >/dev/null || true
+echo "$CODE"

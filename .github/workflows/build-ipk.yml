@@ -72,7 +72,7 @@ jobs:
           done
           cd build
           echo "2.0" > debian-binary
-          # Corrected tar commands below: using * instead of .
+          # Create the two archives separately
           tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL *
           tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data *
           # EXTRA VALIDATION: list contents
@@ -84,6 +84,7 @@ jobs:
             echo "ERROR: data.tar.gz is too small; likely empty."
             exit 1
           fi
+          # Combine the three components into the final .ipk file
           ar -cr rvi-probe_0.5.0-2_all.ipk debian-binary control.tar.gz data.tar.gz
           ls -la rvi-probe_0.5.0-2_all.ipk
           file rvi-probe_0.5.0-2_all.ipk
@@ -129,7 +130,7 @@ jobs:
         if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
         run: |
           set -euxo pipefail
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/2.05/Packages"
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages.gz"
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-2_all.ipk" | tee /tmp/ipk_headers
           grep -i '^cache-control: no-store' /tmp/ipk_headers

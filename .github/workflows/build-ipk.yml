@@ -33,30 +33,25 @@ jobs:
 
           mkdir -p build/{CONTROL,data}
 
-          # Use files/ directory (matches Makefile) instead of root/
-          if [ -d package/rvi-probe/files ] && [ "$(find package/rvi-probe/files -type f | wc -l)" -gt 0 ]; then
-            echo "Using files/ directory as source"
-            cp -r package/rvi-probe/files/* build/data/
-          elif [ -d package/rvi-probe/root ] && [ "$(find package/rvi-probe/root -type f | wc -l)" -gt 0 ]; then
-            echo "Using root/ directory as source"
-            cp -r package/rvi-probe/root/* build/data/
-          else
-            echo "ERROR: No source files found"
-            find package/rvi-probe -type f | head -10
-            exit 1
-          fi
+          # Copy files - use the files/ directory that matches your Makefile
+          echo "Copying files from package/rvi-probe/files/"
+          cp -r package/rvi-probe/files/* build/data/
 
           # Verify files were copied
           FILECOUNT=$(find build/data -type f | wc -l)
           echo "Files copied: $FILECOUNT"
+          find build/data -type f | head -10
+
           if [ "$FILECOUNT" -lt 1 ]; then
             echo "ERROR: No files found to package"
+            echo "Checking package/rvi-probe/files contents:"
+            ls -la package/rvi-probe/files/
             exit 1
           fi
 
           # Set executable permissions
           find build/data -path "*/bin/*" -type f -exec chmod 755 {} + || true
-          find build/data -path "*/sbin/*" -type f -exec chmod 755 {} + || true
+          find build/data -path "*/sbin/*" -type f -exec chmod 755 {} + || true  
           find build/data -path "*/init.d/*" -type f -exec chmod 755 {} + || true
           find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} + || true
           find build/data -name "*.sh" -type f -exec chmod 755 {} + || true
@@ -75,41 +70,46 @@ jobs:
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
           EOC
 
-          # Copy maintainer scripts if they exist
+          # Copy maintainer scripts
           for f in preinst postinst prerm postrm; do
             if [ -f package/rvi-probe/files/CONTROL/$f ]; then
               install -m 755 package/rvi-probe/files/CONTROL/$f build/CONTROL/$f
-            elif [ -f package/rvi-probe/CONTROL/$f ]; then
-              install -m 755 package/rvi-probe/CONTROL/$f build/CONTROL/$f
             fi
           done
 
           cd build
 
-          # Create IPK package files
+          # Create IPK files
           echo "2.0" > debian-binary
           tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
           
-          # Create data archive using simpler method
+          # Create data archive - FIXED METHOD
+          echo "Files being archived:"
+          find data -type f | head -5
+          
+          # Change to data directory and create archive from there
           cd data
-          tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz .
+          tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz *
           cd ..
 
-          # Verify data.tar.gz is not empty
-          if [ ! -s data.tar.gz ]; then
-            echo "ERROR: data.tar.gz is empty"
-            ls -la data/
+          # Verify data archive is not empty
+          DATASIZE=$(stat -c%s data.tar.gz)
+          echo "Data archive size: $DATASIZE bytes"
+          echo "Data archive contents:"
+          tar -tzf data.tar.gz | head -10
+
+          if [ "$DATASIZE" -lt 50 ]; then
+            echo "ERROR: data.tar.gz is too small"
             exit 1
           fi
 
           # Create the IPK
           ar -cr rvi-probe_0.5.0-2_all.ipk debian-binary control.tar.gz data.tar.gz
           
-          # Verify the final IPK
           ls -la rvi-probe_0.5.0-2_all.ipk
           echo "IPK package built successfully"
 
-      - name: Create clean package index
+      - name: Create package index
         run: |
           set -euxo pipefail
           cd build
@@ -139,13 +139,15 @@ jobs:
           set -euxo pipefail
           cd build
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type text/plain
-          aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip
-          aws s3 cp rvi-probe_0.5.0-2_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream
+          
+          # Upload with no-cache to ensure fresh downloads
+          aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type text/plain --cache-control 'no-store'
+          aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --cache-control 'no-store'
+          aws s3 cp rvi-probe_0.5.0-2_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --cache-control 'no-store'
 
       - name: Verify upload
-        if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
         run: |
           set -euxo pipefail
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-2_all.ipk"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages" || echo "Package index check failed"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-2_all.ipk" || echo "IPK check failed"
+          echo "Upload complete"

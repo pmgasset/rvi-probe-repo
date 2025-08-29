@@ -130,7 +130,7 @@ jobs:
         if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
         run: |
           set -euxo pipefail
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/2.05/Packages"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages.gz"
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-2_all.ipk" | tee /tmp/ipk_headers
           grep -i '^cache-control: no-store' /tmp/ipk_headers

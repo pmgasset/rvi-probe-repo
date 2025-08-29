@@ -21,3 +21,23 @@ OpenWrt/FriendlyWrt probe package + universal installer.
 
 
 Default Worker URL: `https://status-hunter.traveldata.workers.dev/`.
+
+## Package verification
+
+Unpack and inspect the IPK locally:
+
+```
+ar t rvi-probe_0.5.0-2_all.ipk
+ar x rvi-probe_0.5.0-2_all.ipk
+tar -tzf data.tar.gz
+```
+
+On device:
+
+```
+opkg update
+opkg install rvi-probe
+opkg files rvi-probe
+ls -l /etc/init.d/rvi-probe /usr/bin/rvi-probe.sh /www/cgi-bin/supportlink
+/etc/init.d/rvi-probe start
+```

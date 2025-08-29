@@ -151,8 +151,8 @@ jobs:
         PACKAGES_DIR=$(find bin/packages -name "*rvi-probe*.ipk" -exec dirname {} \; | head -1)
         cd "$PACKAGES_DIR"
         
-        # Create upload directory structure
-        mkdir -p ../../../upload/all
+        # Create upload directory structure (relative to repo root)
+        mkdir -p ../../../../upload/all
         
         # Copy and rename packages to use 'all' architecture
         for ipk in *rvi-probe*.ipk; do
@@ -160,21 +160,28 @@ jobs:
           # Rename to use 'all' architecture
           new_name=$(echo "$ipk" | sed 's/_[^_]*\.ipk$/_all.ipk/')
           echo "Copying $ipk as $new_name"
-          cp "$ipk" "../../../upload/all/$new_name"
+          cp "$ipk" "../../../../upload/all/$new_name"
         done
         
         # Copy index files
-        cp Packages ../../../upload/all/
-        cp Packages.gz ../../../upload/all/
-        [ -f Packages.sig ] && cp Packages.sig ../../../upload/all/ || true
+        cp Packages ../../../../upload/all/
+        cp Packages.gz ../../../../upload/all/
+        [ -f Packages.sig ] && cp Packages.sig ../../../../upload/all/ || true
         
         echo "Files prepared for upload:"
-        ls -la ../../../upload/all/
+        ls -la ../../../../upload/all/
 
     - name: Sign packages (if enabled)
       run: |
         set -euxo pipefail
-        cd openwrt-sdk/../../upload/all
+        
+        # Check if upload directory exists
+        if [ ! -d "upload/all" ]; then
+          echo "ERROR: Upload directory not found"
+          exit 1
+        fi
+        
+        cd upload/all
         
         if [ "${{ vars.SIGNING_ENABLED }}" = "1" ] && [ -n "${{ secrets.USIGN_PRIVATE_KEY_BASE64 }}" ]; then
           echo "Signing packages..."
@@ -209,9 +216,8 @@ jobs:
       run: |
         set -euxo pipefail
         
-        # Use the upload pattern from your existing script
-        OUT="openwrt-sdk/../../upload/all"
-        cd "$OUT"
+        # Go to upload directory
+        cd upload/all
         
         echo "Files to upload:"
         ls -la
@@ -250,7 +256,7 @@ jobs:
         fi
         
         # Verify at least one IPK was uploaded
-        cd openwrt-sdk/../../upload/all
+        cd upload/all
         LOCAL_IPK=$(ls *rvi-probe*_all.ipk | head -1)
         IPK_NAME=$(basename "$LOCAL_IPK")
         

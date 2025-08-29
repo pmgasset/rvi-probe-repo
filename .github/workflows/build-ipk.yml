@@ -107,37 +107,44 @@ jobs:
         for ipk in $RVI_PACKAGES; do
           echo "Processing: $ipk"
           
+          # Store absolute paths before any directory changes
+          CURRENT_DIR="$(pwd)"
+          IPK_FILE="$CURRENT_DIR/$ipk"
+          UPLOAD_DIR="$CURRENT_DIR/../../../upload/all"
+          PACKAGES_FILE="$UPLOAD_DIR/Packages"
+          
           # Rename to 'all' architecture
           new_name=$(echo "$ipk" | sed 's/_[^_]*\.ipk$/_all.ipk/')
-          cp "$ipk" "../../../upload/all/$new_name"
+          cp "$ipk" "$UPLOAD_DIR/$new_name"
           
           # Get file metadata
-          SIZE=$(stat -c%s "../../../upload/all/$new_name")
-          MD5=$(md5sum "../../../upload/all/$new_name" | cut -d' ' -f1)
-          SHA256=$(sha256sum "../../../upload/all/$new_name" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$UPLOAD_DIR/$new_name")
+          MD5=$(md5sum "$UPLOAD_DIR/$new_name" | cut -d' ' -f1)
+          SHA256=$(sha256sum "$UPLOAD_DIR/$new_name" | cut -d' ' -f1)
           
-          # Extract control info from IPK
+          # Extract control info from IPK using absolute paths
           TMP_DIR=$(mktemp -d)
           cd "$TMP_DIR"
           
-          if ar -x "$PACKAGES_DIR/$ipk" control.tar.gz 2>/dev/null && tar -xzf control.tar.gz 2>/dev/null; then
+          if ar -x "$IPK_FILE" control.tar.gz 2>/dev/null && tar -xzf control.tar.gz 2>/dev/null; then
             if [ -f control ]; then
               echo "Using extracted control file"
-              sed 's/^Architecture:.*/Architecture: all/' control >> "$PACKAGES_DIR/../../../upload/all/Packages"
+              sed 's/^Architecture:.*/Architecture: all/' control >> "$PACKAGES_FILE"
             else
               echo "No control file found, using fallback"
-              printf "Package: rvi-probe\nVersion: 0.5.0-1\nArchitecture: all\nMaintainer: RVInternetHelp <support@rvinternethelp.com>\nSection: net\nPriority: optional\nDepends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\nDescription: RVInternetHelp Network Probe\n Support/diagnostics agent with outage checks, speed tests,\n Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n" >> "$PACKAGES_DIR/../../../upload/all/Packages"
+              printf "Package: rvi-probe\nVersion: 0.5.0-1\nArchitecture: all\nMaintainer: RVInternetHelp <support@rvinternethelp.com>\nSection: net\nPriority: optional\nDepends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\nDescription: RVInternetHelp Network Probe\n Support/diagnostics agent with outage checks, speed tests,\n Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n" >> "$PACKAGES_FILE"
             fi
           else
             echo "Failed to extract control, using fallback"
-            printf "Package: rvi-probe\nVersion: 0.5.0-1\nArchitecture: all\nMaintainer: RVInternetHelp <support@rvinternethelp.com>\nSection: net\nPriority: optional\nDepends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\nDescription: RVInternetHelp Network Probe\n Support/diagnostics agent with outage checks, speed tests,\n Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n" >> "$PACKAGES_DIR/../../../upload/all/Packages"
+            printf "Package: rvi-probe\nVersion: 0.5.0-1\nArchitecture: all\nMaintainer: RVInternetHelp <support@rvinternethelp.com>\nSection: net\nPriority: optional\nDepends: curl, ca-bundle, ca-certificates, jq, ip-full, ubus, uclient-fetch, iwinfo, wireless-tools, openssl-util\nDescription: RVInternetHelp Network Probe\n Support/diagnostics agent with outage checks, speed tests,\n Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.\n" >> "$PACKAGES_FILE"
           fi
           
           # Add file metadata
-          printf "Filename: %s\nSize: %s\nMD5Sum: %s\nSHA256sum: %s\n\n" "$new_name" "$SIZE" "$MD5" "$SHA256" >> "$PACKAGES_DIR/../../../upload/all/Packages"
+          printf "Filename: %s\nSize: %s\nMD5Sum: %s\nSHA256sum: %s\n\n" "$new_name" "$SIZE" "$MD5" "$SHA256" >> "$PACKAGES_FILE"
           
-          cd "$PACKAGES_DIR"
+          # Clean up and return to original directory
           rm -rf "$TMP_DIR"
+          cd "$CURRENT_DIR"
           
           # IMPORTANT: Only process the first rvi-probe package
           break

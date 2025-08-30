@@ -11,17 +11,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      # ---- App config ----
+      PKG_VERSION: 0.5.0-6     # <— bump when you publish
+      PKG_NAME: rvi-probe
+
+      # ---- R2 / AWS creds ----
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install AWS CLI v2
+      - name: Install build tools (awscli, binutils, zstd)
         run: |
+          set -euxo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y binutils zstd
           curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
           unzip -q awscliv2.zip
           sudo ./aws/install --update
@@ -29,14 +38,19 @@ jobs:
       - name: Create IPK package
         run: |
           set -euxo pipefail
-          
+
+          NAME="${PKG_NAME}"
+          VER="${PKG_VERSION}"
+          OUT="${NAME}_${VER}_all.ipk"
+
           # Clean build
           rm -rf build
           mkdir -p build/{CONTROL,data}
 
           echo "=== Copying files (exclude CONTROL from data) ==="
-          find package/rvi-probe/files -maxdepth 1 -mindepth 1 -not -name CONTROL -print0 | xargs -0 -I {} cp -r {} build/data/
-          
+          # Copy top-level entries under package/rvi-probe/files (etc, usr, www, etc.)
+          find package/rvi-probe/files -maxdepth 1 -mindepth 1 -not -name CONTROL -print0 | xargs -0 -I {} cp -a {} build/data/
+
           # Verify files copied
           FILECOUNT=$(find build/data -type f | wc -l)
           echo "Files copied: $FILECOUNT"
@@ -52,9 +66,9 @@ jobs:
           find build/data -name "*.sh" -type f -exec chmod 755 {} + || true
 
           # Create control file
-          cat > build/CONTROL/control <<'EOC'
-          Package: rvi-probe
-          Version: 0.5.0-5
+          cat > build/CONTROL/control <<EOC
+          Package: ${NAME}
+          Version: ${VER}
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -65,7 +79,7 @@ jobs:
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
           EOC
 
-          # Copy maintainer scripts
+          # Copy maintainer scripts (optional)
           for f in preinst postinst prerm postrm; do
             if [ -f package/rvi-probe/files/CONTROL/$f ]; then
               install -m 755 package/rvi-probe/files/CONTROL/$f build/CONTROL/$f
@@ -74,11 +88,11 @@ jobs:
 
           cd build
 
-          # Create IPK archives
+          # Create IPK members
           echo "2.0" > debian-binary
           tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
-          
-          # Create data archive using the working method
+
+          # Create data archive
           cd data
           tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz .
           cd ..
@@ -87,32 +101,66 @@ jobs:
           DATASIZE=$(stat -c%s data.tar.gz)
           echo "Data archive size: $DATASIZE bytes"
           echo "Files in archive: $(tar -tzf data.tar.gz | wc -l)"
-          
           if [ "$DATASIZE" -lt 50 ]; then
             echo "ERROR: data.tar.gz too small"
             exit 1
           fi
 
           # Create IPK
-          ar -cr rvi-probe_0.5.0-5_all.ipk debian-binary control.tar.gz data.tar.gz
-          
+          ar -cr "${OUT}" debian-binary control.tar.gz data.tar.gz
           echo "IPK created successfully:"
-          ls -la rvi-probe_0.5.0-5_all.ipk
+          ls -la "${OUT}"
+
+      - name: Verify rvi-probe IPK payload (payload gate)
+        run: |
+          set -euo pipefail
+          cd build
+
+          IPK="$(ls -1 ${PKG_NAME}_${PKG_VERSION}_all.ipk)"
+          echo "Inspecting $IPK"
+          mkdir -p /tmp/ipkcheck && cd /tmp/ipkcheck
+          ar -x "$GITHUB_WORKSPACE/build/$IPK"
+
+          COUNT=0
+          if [ -f data.tar.gz ]; then
+            echo "Found data.tar.gz; showing first 50 entries:"
+            tar -tzf data.tar.gz | sed -n '1,50p'
+            COUNT="$(tar -tzf data.tar.gz | grep -vE '^\./?$' | wc -l)"
+          elif [ -f data.tar.zst ]; then
+            echo "Found data.tar.zst; decompressing"
+            zstd -dq data.tar.zst
+            echo "Showing first 50 entries:"
+            tar -tf data.tar | sed -n '1,50p'
+            COUNT="$(tar -tf data.tar | grep -vE '^\./?$' | wc -l)"
+          else
+            echo "ERROR: No data.tar.* in IPK"
+            exit 1
+          fi
+
+          echo "Payload file count: $COUNT"
+          MIN_FILES=7   # init, 3 usr/bin helpers, 2 lib scripts, 2 cgi, etc. Adjust if needed.
+          if [ "$COUNT" -lt "$MIN_FILES" ]; then
+            echo "ERROR: IPK payload too small (empty or directories only)"
+            exit 1
+          fi
+
+          echo "Payload looks good ✅"
 
       - name: Create package index
         run: |
           set -euxo pipefail
           cd build
-          
-          SIZE=$(stat -c%s rvi-probe_0.5.0-5_all.ipk)
-          MD5=$(md5sum rvi-probe_0.5.0-5_all.ipk | cut -d' ' -f1)
-          SHA256=$(sha256sum rvi-probe_0.5.0-5_all.ipk | cut -d' ' -f1)
-          
+
+          IPK="${PKG_NAME}_${PKG_VERSION}_all.ipk"
+          SIZE=$(stat -c%s "$IPK")
+          MD5=$(md5sum "$IPK" | cut -d' ' -f1)
+          SHA256=$(sha256sum "$IPK" | cut -d' ' -f1)
+
           echo "Package stats: Size=$SIZE, MD5=$MD5"
-          
+
           cat > Packages <<EOF
-          Package: rvi-probe
-          Version: 0.5.0-5
+          Package: ${PKG_NAME}
+          Version: ${PKG_VERSION}
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -121,52 +169,46 @@ jobs:
           Description: RVInternetHelp Network Probe
            Support/diagnostics agent with outage checks, speed tests,
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
-          Filename: rvi-probe_0.5.0-5_all.ipk
+          Filename: ${IPK}
           Size: $SIZE
           MD5Sum: $MD5
           SHA256sum: $SHA256
 
           EOF
-          
+
           gzip -fk9 Packages
 
       - name: Upload to Cloudflare R2
+        if: ${{ success() }}
         run: |
           set -euxo pipefail
           cd build
-          
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          
+
           echo "Uploading to Cloudflare R2..."
-          
-          # Upload package index
           aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type text/plain --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
-            
+
           aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/gzip --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
-            
-          # Upload IPK package
-          aws s3 cp rvi-probe_0.5.0-5_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" \
+
+          IPK="${PKG_NAME}_${PKG_VERSION}_all.ipk"
+          aws s3 cp "$IPK" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/octet-stream --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
-            
           echo "Upload complete!"
 
       - name: Verify upload
+        if: ${{ success() }}
         run: |
           set -euxo pipefail
-          
-          echo "Waiting for CDN propagation..."
+          echo "Waiting briefly for CDN propagation..."
           sleep 5
-          
-          echo "Verifying uploaded files..."
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages" || echo "Package index verification failed"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-5_all.ipk" || echo "IPK verification failed"
-          
-          echo "Build and upload complete - version 0.5.0-5 ready for installation"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${PKG_VERSION}_all.ipk"
+          echo "Build and upload complete - version ${PKG_VERSION} ready for installation"

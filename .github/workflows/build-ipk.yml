@@ -47,10 +47,8 @@ jobs:
           mkdir -p build/{CONTROL,data}
 
           echo "=== Copying files (exclude CONTROL from data) ==="
-          # Copy top-level entries under package/rvi-probe/files (etc, usr, www, etc.)
           find package/rvi-probe/files -maxdepth 1 -mindepth 1 -not -name CONTROL -print0 | xargs -0 -I {} cp -a {} build/data/
 
-          # Verify files copied
           FILECOUNT=$(find build/data -type f | wc -l)
           echo "Files copied: $FILECOUNT"
           if [ "$FILECOUNT" -eq 0 ]; then
@@ -58,13 +56,13 @@ jobs:
             exit 1
           fi
 
-          # Set permissions
+          # Permissions
           find build/data -path "*/bin/*" -type f -exec chmod 755 {} + || true
           find build/data -path "*/init.d/*" -type f -exec chmod 755 {} + || true
           find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} + || true
           find build/data -name "*.sh" -type f -exec chmod 755 {} + || true
 
-          # Create control file
+          # Control
           cat > build/CONTROL/control <<EOC
           Package: ${NAME}
           Version: ${VER}
@@ -78,7 +76,7 @@ jobs:
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
           EOC
 
-          # Copy maintainer scripts (optional)
+          # Maintainer scripts (optional)
           for f in preinst postinst prerm postrm; do
             if [ -f package/rvi-probe/files/CONTROL/$f ]; then
               install -m 755 package/rvi-probe/files/CONTROL/$f build/CONTROL/$f
@@ -87,16 +85,15 @@ jobs:
 
           cd build
 
-          # Create IPK members
+          # IPK members
           echo "2.0" > debian-binary
           tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
 
-          # Create data archive
+          # Data archive
           cd data
           tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz .
           cd ..
 
-          # Verify data archive
           DATASIZE=$(stat -c%s data.tar.gz)
           echo "Data archive size: $DATASIZE bytes"
           echo "Files in archive: $(tar -tzf data.tar.gz | wc -l)"
@@ -105,13 +102,145 @@ jobs:
             exit 1
           fi
 
-          # Create IPK
+          # IPK
           ar -cr "${OUT}" debian-binary control.tar.gz data.tar.gz
           echo "IPK created successfully:"
           ls -la "${OUT}"
 
-          # NEW: also publish the raw payload for direct install with tar on OpenWrt
+          # Also publish raw payload for direct extraction
           cp data.tar.gz "${NAME}_${VER}_payload.tar.gz"
+
+          # Generate a one-shot installer script (self-healing)
+          cat > "install-${NAME}-${VER}.sh" <<'SH'
+          #!/bin/sh
+          # Self-healing installer for rvi-probe on OpenWrt
+          set +e
+          NAME="rvi-probe"
+          VER="__VER__"
+          BASE="https://r2.rvinternethelp.com/openwrt/23.05"
+          IPK="${BASE}/${NAME}_${VER}_all.ipk"
+          PAY="${BASE}/${NAME}_${VER}_payload.tar.gz"
+
+          say(){ echo "[${NAME} install] $*"; }
+
+          have(){ command -v "$1" >/dev/null 2>&1; }
+
+          ok_files(){
+            [ -f /etc/init.d/rvi-probe ] || return 1
+            [ -f /usr/bin/rvi-speedtest ] || return 1
+            [ -f /usr/lib/rvi-probe/agent.sh ] || return 1
+            [ -f /www/cgi-bin/json ] || return 1
+            return 0
+          }
+
+          write_list(){
+            mkdir -p /usr/lib/opkg/info
+            cat > /usr/lib/opkg/info/rvi-probe.list <<'EOF'
+          /etc/init.d/rvi-probe
+          /usr/bin/rvi-outage-check
+          /usr/bin/rvi-sharecode
+          /usr/bin/rvi-speedtest
+          /usr/lib/rvi-probe/agent.sh
+          /usr/lib/rvi-probe/cell.sh
+          /usr/lib/lua/luci/controller/rvi.lua
+          /www/cgi-bin/supportlink
+          /www/cgi-bin/json
+          /etc/config/rviprobe
+          EOF
+          }
+
+          perms(){
+            for f in \
+              /etc/init.d/rvi-probe \
+              /usr/bin/rvi-outage-check /usr/bin/rvi-sharecode /usr/bin/rvi-speedtest \
+              /usr/lib/rvi-probe/agent.sh /usr/lib/rvi-probe/cell.sh \
+              /www/cgi-bin/supportlink /www/cgi-bin/json
+            do [ -f "$f" ] && chmod 0755 "$f"; done
+          }
+
+          uhttpd_cfg(){
+            [ -f /etc/config/uhttpd ] || touch /etc/config/uhttpd
+            if ! uci -q get uhttpd.rvi >/dev/null 2>&1; then
+              uci -q batch <<'EOF'
+          set uhttpd.rvi=uhttpd
+          set uhttpd.rvi.listen_http='127.0.0.1:8081'
+          set uhttpd.rvi.home='/www'
+          add_list uhttpd.rvi.cgi_prefix='/cgi-bin'
+          set uhttpd.rvi.script_timeout='60'
+          set uhttpd.rvi.network_timeout='30'
+          set uhttpd.rvi.tcp_keepalive='1'
+          add_list uhttpd.rvi.alias='/json=/cgi-bin/json'
+          commit uhttpd
+          EOF
+            else
+              uci -q add_list uhttpd.rvi.alias='/json=/cgi-bin/json' 2>/dev/null || true
+              uci -q commit uhttpd
+            fi
+            [ -x /etc/init.d/uhttpd ] && { /etc/init.d/uhttpd reload >/dev/null 2>&1 || /etc/init.d/uhttpd restart >/dev/null 2>&1 || true; }
+          }
+
+          cloudflared_cfg(){
+            [ -x /etc/init.d/cloudflared ] || return 0
+            mkdir -p /etc/cloudflared
+            CFG=/etc/cloudflared/config.yml
+            if [ ! -s "$CFG" ] || ! grep -q "127.0.0.1:8081" "$CFG" 2>/dev/null; then
+              cat > "$CFG" <<'YAML'
+          url: http://127.0.0.1:8081
+          metrics: 127.0.0.1:2000
+          ingress:
+            - service: http://127.0.0.1:8081
+            - service: http_status:404
+          YAML
+            fi
+            /etc/init.d/cloudflared enable >/dev/null 2>&1 || true
+            /etc/init.d/cloudflared restart >/dev/null 2>&1 || true
+          }
+
+          enable_start(){
+            [ -x /etc/init.d/rvi-probe ] && {
+              /etc/init.d/rvi-probe enable >/dev/null 2>&1 || true
+              /etc/init.d/rvi-probe start  >/dev/null 2>&1 || true
+            }
+          }
+
+          # 1) Try opkg install from feed
+          if have opkg; then
+            say "installing via opkg…"
+            opkg update >/dev/null 2>&1 || true
+            opkg install "${IPK}" >/dev/null 2>&1 || opkg install rvi-probe >/dev/null 2>&1
+          fi
+
+          # 2) Verify; if missing, fallback to payload tar
+          if ! ok_files; then
+            say "opkg didn’t lay down files; falling back to payload"
+            TMP="/tmp/rvi-probe-payload.tar.gz"
+            if have uclient-fetch; then
+              uclient-fetch -qO "$TMP" "$PAY" || exit 1
+            elif have wget; then
+              wget -q -O "$TMP" "$PAY" || exit 1
+            else
+              say "no downloader available"; exit 1
+            fi
+            tar -xzf "$TMP" -C /
+          fi
+
+          # 3) Post steps: perms, .list, config, start
+          perms
+          write_list
+          uhttpd_cfg
+          cloudflared_cfg
+          enable_start
+
+          say "install finished; checking JSON endpoint:"
+          if have uclient-fetch; then
+            uclient-fetch -qO- http://127.0.0.1:8081/json 2>/dev/null | head -n 3
+          fi
+          exit 0
+          SH
+
+          # Inject version string
+          sed -i "s/__VER__/${VER}/g" "install-${NAME}-${VER}.sh"
+          chmod +x "install-${NAME}-${VER}.sh"
 
       - name: Verify rvi-probe IPK payload (payload gate)
         run: |
@@ -137,7 +266,7 @@ jobs:
             exit 1
           fi
           echo "Payload file count: $COUNT"
-          MIN_FILES=7   # init, 3 usr/bin helpers, 2 lib scripts, 2 cgi, etc. Adjust if needed.
+          MIN_FILES=7
           if [ "$COUNT" -lt "$MIN_FILES" ]; then
             echo "ERROR: IPK payload too small (empty or directories only)"
             exit 1
@@ -196,11 +325,18 @@ jobs:
             --content-type application/octet-stream --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
 
-          # NEW: payload tar (for direct extraction installs)
+          # Payload tar
           PAYLOAD="${PKG_NAME}_${PKG_VERSION}_payload.tar.gz"
           aws s3 cp "$PAYLOAD" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/gzip --cache-control 'no-cache, no-store, must-revalidate' \
+            --metadata-directive REPLACE
+
+          # Installer script
+          INSTALL="install-${PKG_NAME}-${PKG_VERSION}.sh"
+          aws s3 cp "$INSTALL" "s3://${R2_BUCKET}/openwrt/23.05/" \
+            --endpoint-url "$ENDPOINT" --acl public-read \
+            --content-type text/x-shellscript --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
 
           echo "Upload complete!"
@@ -213,6 +349,6 @@ jobs:
           sleep 5
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${PKG_VERSION}_all.ipk"
-          # NEW: verify payload tar is visible too
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${PKG_VERSION}_payload.tar.gz"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/install-${PKG_NAME}-${PKG_VERSION}.sh"
           echo "Build and upload complete - version ${PKG_VERSION} ready for installation"

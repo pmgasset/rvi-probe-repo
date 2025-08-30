@@ -28,7 +28,6 @@ add_uhttpd() {
 }
 
 provision_cloudflared() {
-  # Ensure cloudflared present
   if ! command -v cloudflared >/dev/null 2>&1; then
     opkg update >/dev/null 2>&1 || true
     opkg install cloudflared >/dev/null 2>&1 || true
@@ -42,11 +41,9 @@ provision_cloudflared() {
   esac
   HOSTNAME="${MAC}.nomadconnect.app"
 
-  # Worker URL from config or default
   WORKER_URL="$(uci -q get rviprobe.config.worker_url || echo https://status-hunter.traveldata.workers.dev/)"
   PROV_URL="${WORKER_URL%/}/provision"
 
-  # Try 4 attempts with backoff
   ATTEMPTS=0; TOKEN=""
   while [ $ATTEMPTS -lt 4 ]; do
     ATTEMPTS=$((ATTEMPTS+1))
@@ -70,7 +67,6 @@ provision_cloudflared() {
   fi
 }
 
-# Permissions and service enable
 chmod 0755 /usr/bin/rvi-* /usr/lib/rvi-probe/agent.sh /usr/lib/rvi-probe/cell.sh /www/cgi-bin/supportlink /www/cgi-bin/json 2>/dev/null || true
 /etc/init.d/rvi-probe enable >/dev/null 2>&1 || true
 /etc/init.d/rvi-probe start  >/dev/null 2>&1 || true
@@ -78,7 +74,6 @@ chmod 0755 /usr/bin/rvi-* /usr/lib/rvi-probe/agent.sh /usr/lib/rvi-probe/cell.sh
 add_uhttpd
 provision_cloudflared
 
-# Self-heal: ensure opkg file list exists; if not, fetch versioned installer and run
 if ! opkg files rvi-probe >/dev/null 2>&1; then
   VER="__VER__"
   BASE="https://r2.rvinternethelp.com/openwrt/23.05"

@@ -21,3 +21,15 @@ OpenWrt/FriendlyWrt probe package + universal installer.
 
 
 Default Worker URL: `https://status-hunter.traveldata.workers.dev/`.
+
+## Cloudflare provisioning (per-device hostname)
+- Worker: `worker/src/provision.js`, config in `worker/wrangler.toml`.
+- Required Worker vars:
+  - `ACCOUNT_ID`, `ZONE_ID`, `ZONE_NAME`
+  - Secret `API_TOKEN` (scopes: Account Tunnel:Edit, Zone DNS:Edit)
+  - KV binding `TUNNELS_KV` storing `mac -> tunnel_id`
+- Device flow (postinst/installer):
+  - Compute `mac` (lowercase 12-hex, no colons)
+  - POST `{ mac }` to `/provision`
+  - Receive `{ token, hostname }`, write token to `/etc/cloudflared/token`
+  - Start `/etc/init.d/cloudflared` to serve `uhttpd` on `127.0.0.1:8081`

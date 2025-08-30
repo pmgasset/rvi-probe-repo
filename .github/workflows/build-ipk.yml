@@ -30,14 +30,14 @@ jobs:
       - name: Create IPK package manually
         run: |
           set -euxo pipefail
+          VER="0.5.0-4"
           mkdir -p build/{CONTROL,data}
-          # Copy from a rootfs-style folder
-          if [ ! -d package/rvi-probe/root ]; then
-            echo "ERROR: package/rvi-probe/root does not exist. Add your files here (etc/, usr/, www/, ...)."
+          # Copy from files/ (OpenWrt-style repo tree)
+          if [ ! -d package/rvi-probe/files ]; then
+            echo "ERROR: package/rvi-probe/files does not exist."
             exit 1
           fi
-          # Copy while preserving perms/exec bits
-          rsync -a package/rvi-probe/root/ build/data/
+          rsync -a package/rvi-probe/files/ build/data/
           # Sanity check: ensure at least 1 regular file
           FILECOUNT=$(find build/data -type f | wc -l | tr -d ' ')
           if [ "$FILECOUNT" -lt 1 ]; then
@@ -52,9 +52,9 @@ jobs:
           find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} +
           find build/data -name "*.sh" -type f -exec chmod 755 {} +
           # CONTROL/control
-          cat > build/CONTROL/control <<'EOC'
+          cat > build/CONTROL/control <<EOC
           Package: rvi-probe
-          Version: 0.5.0-2
+          Version: ${VER}
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -64,17 +64,22 @@ jobs:
            Support/diagnostics agent with outage checks, speed tests,
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
           EOC
-          # Optional maintainer scripts (if present)
-          for f in preinst postinst prerm postrm; do
-            if [ -f package/rvi-probe/CONTROL/$f ]; then
-              install -m 755 package/rvi-probe/CONTROL/$f build/CONTROL/$f
+          # Maintainer scripts: prefer stamped postinst.in if present
+          for f in preinst prerm postrm; do
+            if [ -f package/rvi-probe/files/CONTROL/$f ]; then
+              install -m 755 package/rvi-probe/files/CONTROL/$f build/CONTROL/$f
             fi
           done
+          if [ -f package/rvi-probe/files/CONTROL/postinst.in ]; then
+            sed "s/__VER__/${VER}/g" package/rvi-probe/files/CONTROL/postinst.in > build/CONTROL/postinst
+            chmod 755 build/CONTROL/postinst
+          elif [ -f package/rvi-probe/files/CONTROL/postinst ]; then
+            install -m 755 package/rvi-probe/files/CONTROL/postinst build/CONTROL/postinst
+          fi
           cd build
           echo "2.0" > debian-binary
-          # Corrected tar commands below: using * instead of .
-          tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL *
-          tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data *
+          tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
+          tar --owner=0 --group=0 --numeric-owner -czf data.tar.gz -C data .
           # EXTRA VALIDATION: list contents
           echo "=== control.tar.gz ==="; tar -tzf control.tar.gz
           echo "=== data.tar.gz (should list your files) ==="; tar -tzf data.tar.gz
@@ -84,21 +89,22 @@ jobs:
             echo "ERROR: data.tar.gz is too small; likely empty."
             exit 1
           fi
-          ar -cr rvi-probe_0.5.0-2_all.ipk debian-binary control.tar.gz data.tar.gz
-          ls -la rvi-probe_0.5.0-2_all.ipk
-          file rvi-probe_0.5.0-2_all.ipk
+          ar -cr rvi-probe_${VER}_all.ipk debian-binary control.tar.gz data.tar.gz
+          ls -la rvi-probe_${VER}_all.ipk
+          file rvi-probe_${VER}_all.ipk
           echo "IPK package built successfully"
 
       - name: Create clean package index
         run: |
           set -euxo pipefail
           cd build
-          SIZE=$(stat -c%s rvi-probe_0.5.0-2_all.ipk)
-          MD5=$(md5sum rvi-probe_0.5.0-2_all.ipk | cut -d' ' -f1)
-          SHA256=$(sha256sum rvi-probe_0.5.0-2_all.ipk | cut -d' ' -f1)
+          VER="0.5.0-4"
+          SIZE=$(stat -c%s rvi-probe_${VER}_all.ipk)
+          MD5=$(md5sum rvi-probe_${VER}_all.ipk | cut -d' ' -f1)
+          SHA256=$(sha256sum rvi-probe_${VER}_all.ipk | cut -d' ' -f1)
           cat > Packages <<EOP
           Package: rvi-probe
-          Version: 0.5.0-2
+          Version: ${VER}
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -107,7 +113,7 @@ jobs:
           Description: RVInternetHelp Network Probe
            Support/diagnostics agent with outage checks, speed tests,
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
-          Filename: rvi-probe_0.5.0-2_all.ipk
+          Filename: rvi-probe_${VER}_all.ipk
           Size: $SIZE
           MD5Sum: $MD5
           SHA256sum: $SHA256
@@ -120,10 +126,10 @@ jobs:
         run: |
           set -euxo pipefail
           cd build
-          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          VER="0.5.0-4"; ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type text/plain --cache-control 'no-store'
           aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/gzip --cache-control 'no-store'
-          aws s3 cp rvi-probe_0.5.0-2_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --cache-control 'no-store' --metadata-directive REPLACE
+          aws s3 cp rvi-probe_${VER}_all.ipk "s3://${R2_BUCKET}/openwrt/23.05/" --endpoint-url "$ENDPOINT" --acl public-read --content-type application/octet-stream --cache-control 'no-store' --metadata-directive REPLACE
 
       - name: Verify upload
         if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
@@ -131,5 +137,5 @@ jobs:
           set -euxo pipefail
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages.gz"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-2_all.ipk" | tee /tmp/ipk_headers
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/rvi-probe_0.5.0-4_all.ipk" | tee /tmp/ipk_headers
           grep -i '^cache-control: no-store' /tmp/ipk_headers

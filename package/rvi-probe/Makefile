@@ -33,24 +33,9 @@ define Build/Compile
   # nothing to compile
 endef
 
-# ===== File install (matches repo paths under package/rvi-probe/files) =====
+# ===== File install (matches repo paths under package/rvi-probe/root) =====
 define Package/rvi-probe/install
-	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) ./files/etc/init.d/rvi-probe $(1)/etc/init.d/rvi-probe
-
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) ./files/usr/bin/rvi-probe     $(1)/usr/bin/rvi-probe
-	$(INSTALL_BIN) ./files/usr/bin/rvi-speedtest $(1)/usr/bin/rvi-speedtest
-	$(INSTALL_BIN) ./files/usr/bin/rvi-sharecode $(1)/usr/bin/rvi-sharecode
-
-	$(INSTALL_DIR) $(1)/usr/lib/rvi-probe
-	$(INSTALL_BIN) ./files/usr/lib/rvi-probe/agent.sh $(1)/usr/lib/rvi-probe/agent.sh
-	$(INSTALL_BIN) ./files/usr/lib/rvi-probe/cell.sh  $(1)/usr/lib/rvi-probe/cell.sh
-
-	$(INSTALL_DIR) $(1)/www/cgi-bin
-	$(INSTALL_BIN) ./files/www/cgi-bin/supportlink $(1)/www/cgi-bin/supportlink
-	$(INSTALL_BIN) ./files/www/cgi-bin/json        $(1)/www/cgi-bin/json
-
+	$(CP) ./root/* $(1)/
 	$(INSTALL_DIR) $(1)/etc/rvi-probe
 endef
 

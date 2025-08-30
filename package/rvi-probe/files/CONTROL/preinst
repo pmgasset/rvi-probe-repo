@@ -1,4 +1,0 @@
-#!/bin/sh
-# preinst - rvi-probe
-# Keep this as a no-op but do NOT use `set -e` so nothing can fail here.
-exit 0

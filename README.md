@@ -8,6 +8,12 @@ OpenWrt/FriendlyWrt probe package + universal installer.
 - JSON status at `/json`
 - Optional feed signing via `usign`
 
+## Packaging layout
+
+All files that land on the target device live under `package/rvi-probe/root/`,
+mirroring the final filesystem structure (e.g. `etc/`, `usr/`, `www/`).
+Keep new files in this tree to avoid duplicating `root/` and `files/` directories.
+
 ## Quick start (local build)
 1. Download the OpenWrt SDK matching any target (we build `noarch`): e.g. x86_64 SDK 23.05.3.
 

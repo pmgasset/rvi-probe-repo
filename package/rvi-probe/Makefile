@@ -35,27 +35,22 @@ endef
 
 # ===== File install (matches repo paths under package/rvi-probe/files) =====
 define Package/rvi-probe/install
-	# Init
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/rvi-probe $(1)/etc/init.d/rvi-probe
 
-	# Binaries (install every rvi-* tool that exists in repo)
 	$(INSTALL_DIR) $(1)/usr/bin
-	# If none match, 'true' prevents a non-zero exit:
-	[ -n "$$(echo ./files/usr/bin/rvi-* 2>/dev/null | grep 'rvi-')" ] && \
-	  $(INSTALL_BIN) ./files/usr/bin/rvi-* $(1)/usr/bin || true
+	$(INSTALL_BIN) ./files/usr/bin/rvi-probe     $(1)/usr/bin/rvi-probe
+	$(INSTALL_BIN) ./files/usr/bin/rvi-speedtest $(1)/usr/bin/rvi-speedtest
+	$(INSTALL_BIN) ./files/usr/bin/rvi-sharecode $(1)/usr/bin/rvi-sharecode
 
-	# Library scripts
 	$(INSTALL_DIR) $(1)/usr/lib/rvi-probe
 	$(INSTALL_BIN) ./files/usr/lib/rvi-probe/agent.sh $(1)/usr/lib/rvi-probe/agent.sh
 	$(INSTALL_BIN) ./files/usr/lib/rvi-probe/cell.sh  $(1)/usr/lib/rvi-probe/cell.sh
 
-	# Web CGI
 	$(INSTALL_DIR) $(1)/www/cgi-bin
 	$(INSTALL_BIN) ./files/www/cgi-bin/supportlink $(1)/www/cgi-bin/supportlink
 	$(INSTALL_BIN) ./files/www/cgi-bin/json        $(1)/www/cgi-bin/json
 
-	# Marker/config dir used by postinst
 	$(INSTALL_DIR) $(1)/etc/rvi-probe
 endef
 

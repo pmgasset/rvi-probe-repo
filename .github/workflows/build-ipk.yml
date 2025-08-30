@@ -26,33 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Derive PKG_VERSION dynamically
-        run: |
-          set -euo pipefail
-          # Prefer git tag for releases (strip leading 'v')
-          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
-            RAW="${GITHUB_REF_NAME#refs/tags/}"
-            RAW="${RAW#v}"
-            echo "PKG_VERSION=$RAW" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          # Otherwise, derive from OpenWrt Makefile PKG_VERSION and PKG_RELEASE
-          MF=package/rvi-probe/Makefile
-          V=$(awk -F':=' '/^PKG_VERSION/{gsub(/ /,"",$2); print $2}' "$MF" 2>/dev/null || true)
-          R=$(awk -F':=' '/^PKG_RELEASE/{gsub(/ /,"",$2); print $2}' "$MF" 2>/dev/null || true)
-          if [ -n "${V:-}" ]; then
-            if [ -n "${R:-}" ]; then
-              echo "PKG_VERSION=${V}-${R}" >> "$GITHUB_ENV"
-            else
-              echo "PKG_VERSION=${V}" >> "$GITHUB_ENV"
-            fi
-          else
-            # Fallback to last tag + CI run number
-            LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0)
-            LAST="${LAST#v}"
-            echo "PKG_VERSION=${LAST}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
-          fi
-
       - name: Install build tools (awscli, binutils, zstd)
         run: |
           set -euxo pipefail
@@ -61,18 +34,22 @@ jobs:
           curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
           unzip -q awscliv2.zip
           sudo ./aws/install --update
+
       - name: Create IPK package
         run: |
           set -euxo pipefail
           NAME="${PKG_NAME}"
           VER="${PKG_VERSION}"
           OUT="${NAME}_${VER}_all.ipk"
+
           # Clean build
           rm -rf build
           mkdir -p build/{CONTROL,data}
+
           echo "=== Copying files (exclude CONTROL from data) ==="
           # Copy top-level entries under package/rvi-probe/files (etc, usr, www, etc.)
           find package/rvi-probe/files -maxdepth 1 -mindepth 1 -not -name CONTROL -print0 | xargs -0 -I {} cp -a {} build/data/
+
           # Verify files copied
           FILECOUNT=$(find build/data -type f | wc -l)
           echo "Files copied: $FILECOUNT"
@@ -80,11 +57,13 @@ jobs:
             echo "ERROR: No files copied!"
             exit 1
           fi
+
           # Set permissions
           find build/data -path "*/bin/*" -type f -exec chmod 755 {} + || true
           find build/data -path "*/init.d/*" -type f -exec chmod 755 {} + || true
           find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} + || true
           find build/data -name "*.sh" -type f -exec chmod 755 {} + || true
+
           # ----- CONTROL files -----
           # Control metadata
           cat > build/CONTROL/control <<EOC
@@ -99,25 +78,31 @@ jobs:
            Support/diagnostics agent with outage checks, speed tests,
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
           EOC
+
           # Stamp postinst from template (ensures URL matches version)
           if [ -f package/rvi-probe/files/CONTROL/postinst.in ]; then
             sed "s/__VER__/${VER}/g" package/rvi-probe/files/CONTROL/postinst.in > build/CONTROL/postinst
             chmod 755 build/CONTROL/postinst
           fi
+
           # Copy optional maintainer scripts (preinst/prerm/postrm) if present
           for f in preinst prerm postrm; do
             if [ -f "package/rvi-probe/files/CONTROL/$f" ]; then
               install -m 755 "package/rvi-probe/files/CONTROL/$f" "build/CONTROL/$f"
             fi
           done
+
           cd build
+
           # Create IPK members
           echo "2.0" > debian-binary
           tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
+
           # Create data archive
           cd data
           tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz .
           cd ..
+
           # Verify data archive
           DATASIZE=$(stat -c%s data.tar.gz)
           echo "Data archive size: $DATASIZE bytes"
@@ -126,13 +111,16 @@ jobs:
             echo "ERROR: data.tar.gz too small"
             exit 1
           fi
+
           # Create IPK
           ar -cr "${OUT}" debian-binary control.tar.gz data.tar.gz
           echo "IPK created successfully:"
           ls -la "${OUT}"
+
           # -------- Extra artifacts --------
           # Raw payload for direct extraction installs
           cp data.tar.gz "${NAME}_${VER}_payload.tar.gz"
+
           # Versioned one-shot installer (self-healing)
           cat > "install-${NAME}-${VER}.sh" <<'SH'
           #!/bin/sh
@@ -142,8 +130,10 @@ jobs:
           BASE="https://r2.rvinternethelp.com/openwrt/23.05"
           IPK="${BASE}/${NAME}_${VER}_all.ipk"
           PAY="${BASE}/${NAME}_${VER}_payload.tar.gz"
+
           say(){ echo "[${NAME} install] $*"; }
           have(){ command -v "$1" >/dev/null 2>&1; }
+
           ok_files(){
             [ -f /etc/init.d/rvi-probe ] || return 1
             [ -f /usr/bin/rvi-speedtest ] || return 1
@@ -151,6 +141,7 @@ jobs:
             [ -f /www/cgi-bin/json ] || return 1
             return 0
           }
+
           write_list(){
             mkdir -p /usr/lib/opkg/info
             cat > /usr/lib/opkg/info/rvi-probe.list <<'EOF'
@@ -166,6 +157,7 @@ jobs:
           /etc/config/rviprobe
           EOF
           }
+
           perms(){
             for f in \
               /etc/init.d/rvi-probe \
@@ -174,6 +166,7 @@ jobs:
               /www/cgi-bin/supportlink /www/cgi-bin/json
             do [ -f "$f" ] && chmod 0755 "$f"; done
           }
+
           uhttpd_cfg(){
             [ -f /etc/config/uhttpd ] || touch /etc/config/uhttpd
             if ! uci -q get uhttpd.rvi >/dev/null 2>&1; then
@@ -194,6 +187,7 @@ jobs:
             fi
             [ -x /etc/init.d/uhttpd ] && { /etc/init.d/uhttpd reload >/dev/null 2>&1 || /etc/init.d/uhttpd restart >/dev/null 2>&1 || true; }
           }
+
           cloudflared_cfg(){
             [ -x /etc/init.d/cloudflared ] || return 0
             mkdir -p /etc/cloudflared
@@ -210,18 +204,21 @@ jobs:
             /etc/init.d/cloudflared enable >/dev/null 2>&1 || true
             /etc/init.d/cloudflared restart >/dev/null 2>&1 || true
           }
+
           enable_start(){
             [ -x /etc/init.d/rvi-probe ] && {
               /etc/init.d/rvi-probe enable >/dev/null 2>&1 || true
               /etc/init.d/rvi-probe start  >/dev/null 2>&1 || true
             }
           }
+
           # 1) Try opkg install from feed
           if have opkg; then
             say "installing via opkg…"
             opkg update >/dev/null 2>&1 || true
             opkg install "${IPK}" >/dev/null 2>&1 || opkg install rvi-probe >/dev/null 2>&1
           fi
+
           # 2) Verify; if missing, fallback to payload tar
           if ! ok_files; then
             say "opkg didn’t lay down files; falling back to payload"
@@ -237,22 +234,27 @@ jobs:
             fi
             tar -xzf "$TMP" -C /
           fi
+
           # 3) Post steps: perms, .list, config, start
           perms
           write_list
           uhttpd_cfg
           cloudflared_cfg
           enable_start
+
           say "install finished; checking JSON endpoint:"
           if have uclient-fetch; then
             uclient-fetch -qO- http://127.0.0.1:8081/json 2>/dev/null | head -n 3
           fi
           exit 0
           SH
+
           # Inject version string into installer script
           sed -i "s/__VER__/${VER}/g" "install-${NAME}-${VER}.sh"
           chmod +x "install-${NAME}-${VER}.sh"
+
           # Also ensure postinst template version is stamped (done above)
+
       - name: Verify rvi-probe IPK payload (payload gate)
         run: |
           set -euo pipefail
@@ -283,6 +285,7 @@ jobs:
             exit 1
           fi
           echo "Payload looks good ✅"
+
       - name: Create package index
         run: |
           set -euxo pipefail
@@ -309,6 +312,7 @@ jobs:
           SHA256sum: $SHA256
           EOF
           gzip -fk9 Packages
+
       - name: Upload to Cloudflare R2
         if: ${{ success() }}
         run: |
@@ -316,6 +320,7 @@ jobs:
           cd build
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           echo "Uploading to Cloudflare R2..."
+
           # Index
           aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
@@ -325,25 +330,30 @@ jobs:
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/gzip --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
+
           # IPK
           IPK="${PKG_NAME}_${PKG_VERSION}_all.ipk"
           aws s3 cp "$IPK" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/octet-stream --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
+
           # Payload tar
           PAYLOAD="${PKG_NAME}_${PKG_VERSION}_payload.tar.gz"
           aws s3 cp "$PAYLOAD" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/gzip --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
+
           # Installer script
           INSTALL="install-${PKG_NAME}-${PKG_VERSION}.sh"
           aws s3 cp "$INSTALL" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type text/x-shellscript --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
+
           echo "Upload complete!"
+
       - name: Verify upload
         if: ${{ success() }}
         run: |

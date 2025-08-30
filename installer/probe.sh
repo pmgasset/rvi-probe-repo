@@ -17,37 +17,14 @@ install_openwrt(){
     echo "src/gz rvi_r2 ${RV_FEED_URL}/${ARCH}" | $SUDO tee -a /etc/opkg/customfeeds.conf
   fi
   $SUDO opkg update
-  $SUDO opkg install ca-bundle ca-certificates curl jq uclient-fetch ip-full || true
+  $SUDO opkg install ca-bundle ca-certificates curl jq || true
   $SUDO opkg install rvi-probe || {
     log "Falling back to direct ipk download"; ARCH=$(opkg print-architecture | tail -n1 | awk '{print $2}')
-    TMP=$(mktemp); URL="${RV_FEED_URL}/${ARCH}/rvi-probe_latest_${ARCH}.ipk"
+    TMP=$(mktemp); URL="${RV_FEED_URL}/${ARCH}/rvi-probe_0.5.0-2_${ARCH}.ipk"
     curl -fsSL "$URL" -o "$TMP"; $SUDO opkg install "$TMP" && rm -f "$TMP"
   }
   $SUDO uci set rviprobe.config.worker_url="$RV_WORKER_URL" || true
   $SUDO uci commit rviprobe || true
-
-  # Compute MAC -> hostname
-  IFACE="$($SUDO uci get network.lan.ifname 2>/dev/null || echo eth0)"
-  MAC="$($SUDO ip link show "$IFACE" 2>/dev/null | awk '/link\/ether/{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
-  HOST="${MAC}.nomadconnect.app"
-
-  # Provision with Worker
-  PROV_URL="${RV_WORKER_URL%/}/provision"
-  RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$PROV_URL" 2>/dev/null || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$PROV_URL" 2>/dev/null || true)
-  TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
-  [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
-
-  if [ -n "$TOKEN" ]; then
-    $SUDO mkdir -p /etc/cloudflared; umask 077
-    printf '%s' "$TOKEN" | $SUDO tee /etc/cloudflared/token >/dev/null
-    $SUDO chmod 600 /etc/cloudflared/token
-    $SUDO /etc/init.d/cloudflared enable || true
-    $SUDO /etc/init.d/cloudflared restart || true
-    log "Provisioned tunnel for $HOST"
-  else
-    log "Provisioning failed now; postinst cron retry will handle it"
-  fi
-
   $SUDO /etc/init.d/rvi-probe enable || true
   $SUDO /etc/init.d/rvi-probe start || true
   log "OpenWrt install complete"

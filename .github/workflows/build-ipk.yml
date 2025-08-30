@@ -123,7 +123,7 @@ jobs:
             fi
             
             echo "Final data archive contents:"
-            tar -tzf data.tar.gz | head -20
+            tar -tzf data.tar.gz | head -20 || true
             echo "File count in archive: $(tar -tzf data.tar.gz | wc -l)"
             
           else

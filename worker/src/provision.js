@@ -2,6 +2,11 @@ export default {
   async fetch(request, env, ctx) {
     try {
       const url = new URL(request.url);
+      // Lightweight config health check (no secrets exposed)
+      if (request.method === 'GET' && url.pathname === '/health') {
+        const missing = missingConfig(env);
+        return json({ ok: missing.length === 0, missing });
+      }
       if (request.method !== 'POST' || url.pathname !== '/provision') {
         return json({ error: 'Not found' }, 404);
       }
@@ -17,8 +22,9 @@ export default {
       }
 
       const { ACCOUNT_ID, ZONE_ID, ZONE_NAME, API_TOKEN, TUNNELS_KV } = env;
-      if (!ACCOUNT_ID || !ZONE_ID || !ZONE_NAME || !API_TOKEN || !TUNNELS_KV) {
-        return json({ error: 'Worker misconfigured' }, 500);
+      const missing = missingConfig(env);
+      if (missing.length) {
+        return json({ error: 'Worker misconfigured', missing }, 500);
       }
 
       const hostname = `${mac}.${ZONE_NAME}`;
@@ -94,6 +100,13 @@ async function cfFetch(env, path, opts = {}) {
     return json;
   }
   return json;
+}
+
+function missingConfig(env) {
+  const required = ['ACCOUNT_ID', 'ZONE_ID', 'ZONE_NAME', 'API_TOKEN'];
+  const missing = required.filter((k) => !env[k]);
+  if (!env.TUNNELS_KV || typeof env.TUNNELS_KV.get !== 'function') missing.push('TUNNELS_KV');
+  return missing;
 }
 
 async function upsertDns(env, zoneId, name, target) {

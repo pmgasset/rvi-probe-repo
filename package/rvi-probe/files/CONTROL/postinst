@@ -1,35 +1,23 @@
 #!/bin/sh
 set +e
 
-# Ensure exec bits (harmless if already set)
-for f in \
-  /etc/init.d/rvi-probe \
-  /usr/bin/rvi-probe /usr/bin/rvi-speedtest /usr/bin/rvi-sharecode /usr/bin/rvi-outage-check \
-  /usr/lib/rvi-probe/agent.sh /usr/lib/rvi-probe/cell.sh \
-  /www/cgi-bin/supportlink /www/cgi-bin/json
-do
-  [ -f "$f" ] && chmod 0755 "$f"
-done
+PKG="rvi-probe"
+VER="__VER__"
+BASE="https://r2.rvinternethelp.com/openwrt/23.05"
+INSTALL_URL="${BASE}/install-${PKG}-${VER}.sh"
 
-# Rebuild opkg filelist (works even if opkg skipped it)
-mkdir -p /usr/lib/opkg/info
-{
-  [ -f /etc/init.d/rvi-probe ] && echo /etc/init.d/rvi-probe
-  for f in /usr/bin/rvi-probe /usr/bin/rvi-speedtest /usr/bin/rvi-sharecode /usr/bin/rvi-outage-check; do
-    [ -f "$f" ] && echo "$f"
-  done
-  [ -f /usr/lib/rvi-probe/agent.sh ] && echo /usr/lib/rvi-probe/agent.sh
-  [ -f /usr/lib/rvi-probe/cell.sh ] && echo /usr/lib/rvi-probe/cell.sh
-  [ -f /usr/lib/lua/luci/controller/rvi.lua ] && echo /usr/lib/lua/luci/controller/rvi.lua
-  [ -f /www/cgi-bin/supportlink ] && echo /www/cgi-bin/supportlink
-  [ -f /www/cgi-bin/json ] && echo /www/cgi-bin/json
-  [ -f /etc/config/rviprobe ] && echo /etc/config/rviprobe
-} | sort -u > /usr/lib/opkg/info/rvi-probe.list
-
-# (Optional) enable + start service
-[ -x /etc/init.d/rvi-probe ] && {
-  /etc/init.d/rvi-probe enable >/dev/null 2>&1 || true
-  /etc/init.d/rvi-probe start  >/dev/null 2>&1 || true
-}
+# If opkg file list is empty, fetch + run the installer fallback
+if ! opkg files $PKG 2>/dev/null | grep -q '/'; then
+  echo "[${PKG}] opkg filelist empty; running installer fallback"
+  if command -v uclient-fetch >/dev/null 2>&1; then
+    uclient-fetch -qO- "$INSTALL_URL" | sh
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "$INSTALL_URL" | sh
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$INSTALL_URL" | sh
+  else
+    echo "[${PKG}] ERROR: no downloader available for fallback"
+  fi
+fi
 
 exit 0

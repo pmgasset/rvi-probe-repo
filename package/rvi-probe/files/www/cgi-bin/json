@@ -1,8 +1,0 @@
-#!/bin/sh
-printf "Content-Type: application/json\r\n\r\n"
-HOST=$(hostname); BOARD=$(cat /tmp/sysinfo/board_name 2>/dev/null)
-IF=$(uci -q get network.wan.ifname 2>/dev/null)
-IP=$(ip -4 addr show "$IF" 2>/dev/null | awk '/inet /{print $2}')
-RTT=$(ping -c1 -W1 1.1.1.1 2>/dev/null | awk -F'/' '/rtt/{print $5}')
-VER=$(opkg info rvi-probe 2>/dev/null | awk -F': ' '/Version/{print $2; exit}')
-printf '{"host":"%s","board":"%s","wan_if":"%s","ip":"%s","rtt_ms":"%s","version":"%s"}\n' "$HOST" "$BOARD" "$IF" "$IP" "$RTT" "$VER"

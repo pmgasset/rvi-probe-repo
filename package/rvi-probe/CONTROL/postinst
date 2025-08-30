@@ -1,3 +1,0 @@
-#!/bin/sh
-[ -x /etc/init.d/rvi-probe ] && /etc/init.d/rvi-probe enable || true
-exit 0

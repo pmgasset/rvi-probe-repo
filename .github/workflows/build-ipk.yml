@@ -47,8 +47,8 @@ jobs:
           mkdir -p build/{CONTROL,data}
 
           echo "=== Copying files (exclude CONTROL from data) ==="
-          # Copy top-level entries under package/rvi-probe/files (etc, usr, www, etc.)
-          find package/rvi-probe/files -maxdepth 1 -mindepth 1 -not -name CONTROL -print0 | xargs -0 -I {} cp -a {} build/data/
+          # Copy top-level entries under package/rvi-probe/root (etc, usr, www, etc.)
+          find package/rvi-probe/root -maxdepth 1 -mindepth 1 -not -name CONTROL -print0 | xargs -0 -I {} cp -a {} build/data/
 
           # Verify files copied
           FILECOUNT=$(find build/data -type f | wc -l)
@@ -80,15 +80,15 @@ jobs:
           EOC
 
           # Stamp postinst from template (ensures URL matches version)
-          if [ -f package/rvi-probe/files/CONTROL/postinst.in ]; then
-            sed "s/__VER__/${VER}/g" package/rvi-probe/files/CONTROL/postinst.in > build/CONTROL/postinst
+          if [ -f package/rvi-probe/root/CONTROL/postinst.in ]; then
+            sed "s/__VER__/${VER}/g" package/rvi-probe/root/CONTROL/postinst.in > build/CONTROL/postinst
             chmod 755 build/CONTROL/postinst
           fi
 
           # Copy optional maintainer scripts (preinst/prerm/postrm) if present
           for f in preinst prerm postrm; do
-            if [ -f "package/rvi-probe/files/CONTROL/$f" ]; then
-              install -m 755 "package/rvi-probe/files/CONTROL/$f" "build/CONTROL/$f"
+            if [ -f "package/rvi-probe/root/CONTROL/$f" ]; then
+              install -m 755 "package/rvi-probe/root/CONTROL/$f" "build/CONTROL/$f"
             fi
           done
 

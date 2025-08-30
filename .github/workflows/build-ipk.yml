@@ -47,8 +47,10 @@ jobs:
           mkdir -p build/{CONTROL,data}
 
           echo "=== Copying files (exclude CONTROL from data) ==="
+          # Copy top-level entries under package/rvi-probe/files (etc, usr, www, etc.)
           find package/rvi-probe/files -maxdepth 1 -mindepth 1 -not -name CONTROL -print0 | xargs -0 -I {} cp -a {} build/data/
 
+          # Verify files copied
           FILECOUNT=$(find build/data -type f | wc -l)
           echo "Files copied: $FILECOUNT"
           if [ "$FILECOUNT" -eq 0 ]; then
@@ -56,13 +58,14 @@ jobs:
             exit 1
           fi
 
-          # Permissions
+          # Set permissions
           find build/data -path "*/bin/*" -type f -exec chmod 755 {} + || true
           find build/data -path "*/init.d/*" -type f -exec chmod 755 {} + || true
           find build/data -path "*/cgi-bin/*" -type f -exec chmod 755 {} + || true
           find build/data -name "*.sh" -type f -exec chmod 755 {} + || true
 
-          # Control
+          # ----- CONTROL files -----
+          # Control metadata
           cat > build/CONTROL/control <<EOC
           Package: ${NAME}
           Version: ${VER}
@@ -76,24 +79,31 @@ jobs:
            Cloudflare tunnel share code, JSON status, cell metrics, and CRM hooks.
           EOC
 
-          # Maintainer scripts (optional)
-          for f in preinst postinst prerm postrm; do
-            if [ -f package/rvi-probe/files/CONTROL/$f ]; then
-              install -m 755 package/rvi-probe/files/CONTROL/$f build/CONTROL/$f
+          # Stamp postinst from template (ensures URL matches version)
+          if [ -f package/rvi-probe/files/CONTROL/postinst.in ]; then
+            sed "s/__VER__/${VER}/g" package/rvi-probe/files/CONTROL/postinst.in > build/CONTROL/postinst
+            chmod 755 build/CONTROL/postinst
+          fi
+
+          # Copy optional maintainer scripts (preinst/prerm/postrm) if present
+          for f in preinst prerm postrm; do
+            if [ -f "package/rvi-probe/files/CONTROL/$f" ]; then
+              install -m 755 "package/rvi-probe/files/CONTROL/$f" "build/CONTROL/$f"
             fi
           done
 
           cd build
 
-          # IPK members
+          # Create IPK members
           echo "2.0" > debian-binary
           tar --owner=0 --group=0 --numeric-owner -czf control.tar.gz -C CONTROL .
 
-          # Data archive
+          # Create data archive
           cd data
           tar --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz .
           cd ..
 
+          # Verify data archive
           DATASIZE=$(stat -c%s data.tar.gz)
           echo "Data archive size: $DATASIZE bytes"
           echo "Files in archive: $(tar -tzf data.tar.gz | wc -l)"
@@ -102,18 +112,18 @@ jobs:
             exit 1
           fi
 
-          # IPK
+          # Create IPK
           ar -cr "${OUT}" debian-binary control.tar.gz data.tar.gz
           echo "IPK created successfully:"
           ls -la "${OUT}"
 
-          # Also publish raw payload for direct extraction
+          # -------- Extra artifacts --------
+          # Raw payload for direct extraction installs
           cp data.tar.gz "${NAME}_${VER}_payload.tar.gz"
 
-          # Generate a one-shot installer script (self-healing)
+          # Versioned one-shot installer (self-healing)
           cat > "install-${NAME}-${VER}.sh" <<'SH'
           #!/bin/sh
-          # Self-healing installer for rvi-probe on OpenWrt
           set +e
           NAME="rvi-probe"
           VER="__VER__"
@@ -122,7 +132,6 @@ jobs:
           PAY="${BASE}/${NAME}_${VER}_payload.tar.gz"
 
           say(){ echo "[${NAME} install] $*"; }
-
           have(){ command -v "$1" >/dev/null 2>&1; }
 
           ok_files(){
@@ -218,6 +227,8 @@ jobs:
               uclient-fetch -qO "$TMP" "$PAY" || exit 1
             elif have wget; then
               wget -q -O "$TMP" "$PAY" || exit 1
+            elif have curl; then
+              curl -fsSL -o "$TMP" "$PAY" || exit 1
             else
               say "no downloader available"; exit 1
             fi
@@ -238,9 +249,11 @@ jobs:
           exit 0
           SH
 
-          # Inject version string
+          # Inject version string into installer script
           sed -i "s/__VER__/${VER}/g" "install-${NAME}-${VER}.sh"
           chmod +x "install-${NAME}-${VER}.sh"
+
+          # Also ensure postinst template version is stamped (done above)
 
       - name: Verify rvi-probe IPK payload (payload gate)
         run: |

@@ -2,12 +2,9 @@
 # Filled via Wrangler or dashboard secrets/bindings at deploy time
 # ACCOUNT_ID, ZONE_ID, ZONE_NAME provided as plain text vars
 # API_TOKEN must be set as a secret
+# adding line here
 
 name = "rvi-provision"
 main = "src/provision.js"
 compatibility_date = "2024-08-01"
-
-[[kv_namespaces]]
-binding = "TUNNELS_KV"
-id = "${TUNNELS_KV_ID}"
 

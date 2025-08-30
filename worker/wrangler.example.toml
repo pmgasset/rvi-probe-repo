@@ -1,10 +1,15 @@
 [vars]
-# Filled via Wrangler or dashboard secrets/bindings at deploy time
-# ACCOUNT_ID, ZONE_ID, ZONE_NAME provided as plain text vars
-# API_TOKEN must be set as a secret
-# adding line here
+# Runtime vars are set in the Cloudflare dashboard (recommended)
+# - ACCOUNT_ID, ZONE_ID, ZONE_NAME (plaintext)
+# - API_TOKEN (secret; scopes: Account Tunnel:Edit, Zone DNS:Edit)
 
 name = "rvi-provision"
 main = "src/provision.js"
 compatibility_date = "2024-08-01"
 
+# Optionally have Wrangler attach KV binding on deploy:
+# account_id = "REPLACE_WITH_YOUR_ACCOUNT_ID"
+# [[kv_namespaces]]
+# binding = "TUNNELS_KV"
+# id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+# preview_id = "REPLACE_WITH_YOUR_PREVIEW_KV_NAMESPACE_ID"

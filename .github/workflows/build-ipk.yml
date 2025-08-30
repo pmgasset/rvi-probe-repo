@@ -38,7 +38,6 @@ jobs:
       - name: Create IPK package
         run: |
           set -euxo pipefail
-
           NAME="${PKG_NAME}"
           VER="${PKG_VERSION}"
           OUT="${NAME}_${VER}_all.ipk"
@@ -111,16 +110,17 @@ jobs:
           echo "IPK created successfully:"
           ls -la "${OUT}"
 
+          # NEW: also publish the raw payload for direct install with tar on OpenWrt
+          cp data.tar.gz "${NAME}_${VER}_payload.tar.gz"
+
       - name: Verify rvi-probe IPK payload (payload gate)
         run: |
           set -euo pipefail
           cd build
-
           IPK="$(ls -1 ${PKG_NAME}_${PKG_VERSION}_all.ipk)"
           echo "Inspecting $IPK"
           mkdir -p /tmp/ipkcheck && cd /tmp/ipkcheck
           ar -x "$GITHUB_WORKSPACE/build/$IPK"
-
           COUNT=0
           if [ -f data.tar.gz ]; then
             echo "Found data.tar.gz; showing first 50 entries:"
@@ -136,28 +136,23 @@ jobs:
             echo "ERROR: No data.tar.* in IPK"
             exit 1
           fi
-
           echo "Payload file count: $COUNT"
           MIN_FILES=7   # init, 3 usr/bin helpers, 2 lib scripts, 2 cgi, etc. Adjust if needed.
           if [ "$COUNT" -lt "$MIN_FILES" ]; then
             echo "ERROR: IPK payload too small (empty or directories only)"
             exit 1
           fi
-
           echo "Payload looks good ✅"
 
       - name: Create package index
         run: |
           set -euxo pipefail
           cd build
-
           IPK="${PKG_NAME}_${PKG_VERSION}_all.ipk"
           SIZE=$(stat -c%s "$IPK")
           MD5=$(md5sum "$IPK" | cut -d' ' -f1)
           SHA256=$(sha256sum "$IPK" | cut -d' ' -f1)
-
           echo "Package stats: Size=$SIZE, MD5=$MD5"
-
           cat > Packages <<EOF
           Package: ${PKG_NAME}
           Version: ${PKG_VERSION}
@@ -173,9 +168,7 @@ jobs:
           Size: $SIZE
           MD5Sum: $MD5
           SHA256sum: $SHA256
-
           EOF
-
           gzip -fk9 Packages
 
       - name: Upload to Cloudflare R2
@@ -184,23 +177,32 @@ jobs:
           set -euxo pipefail
           cd build
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-
           echo "Uploading to Cloudflare R2..."
+
+          # Index
           aws s3 cp Packages "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type text/plain --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
-
           aws s3 cp Packages.gz "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/gzip --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
 
+          # IPK
           IPK="${PKG_NAME}_${PKG_VERSION}_all.ipk"
           aws s3 cp "$IPK" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/octet-stream --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
+
+          # NEW: payload tar (for direct extraction installs)
+          PAYLOAD="${PKG_NAME}_${PKG_VERSION}_payload.tar.gz"
+          aws s3 cp "$PAYLOAD" "s3://${R2_BUCKET}/openwrt/23.05/" \
+            --endpoint-url "$ENDPOINT" --acl public-read \
+            --content-type application/gzip --cache-control 'no-cache, no-store, must-revalidate' \
+            --metadata-directive REPLACE
+
           echo "Upload complete!"
 
       - name: Verify upload
@@ -211,4 +213,6 @@ jobs:
           sleep 5
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${PKG_VERSION}_all.ipk"
+          # NEW: verify payload tar is visible too
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${PKG_VERSION}_payload.tar.gz"
           echo "Build and upload complete - version ${PKG_VERSION} ready for installation"

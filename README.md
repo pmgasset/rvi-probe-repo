@@ -28,16 +28,13 @@ binary, token file, and service status.
 5. Run `scripts/publish-r2.sh <sdk-dir>/bin/packages`.
 
 
-Worker provisioning URL: `https://status-hunter.traveldata.workers.dev/provision`.
-Manual token setup is no longer required.
-
 ## Package verification
 
 Unpack and inspect the IPK locally:
 
 ```
-ar t rvi-probe_0.5.0-2_all.ipk
-ar x rvi-probe_0.5.0-2_all.ipk
+ar t rvi-probe_0.5.0-7_all.ipk
+ar x rvi-probe_0.5.0-7_all.ipk
 tar -tzf data.tar.gz
 ```
 
@@ -50,4 +47,3 @@ opkg files rvi-probe
 ls -l /etc/init.d/rvi-probe /usr/bin/rvi-probe.sh /www/cgi-bin/supportlink
 /etc/init.d/rvi-probe start
 ```
-###

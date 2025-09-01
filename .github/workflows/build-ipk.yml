@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # ---- App config ----
-      PKG_VERSION: 0.5.0-6     # <— bump when you publish
       PKG_NAME: rvi-probe
 
       # ---- R2 / AWS creds ----
@@ -25,6 +24,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Extract package version
+        run: |
+          PKG_VERSION=$(grep '^PKG_VERSION:=' package/rvi-probe/Makefile | cut -d= -f2)
+          PKG_RELEASE=$(grep '^PKG_RELEASE:=' package/rvi-probe/Makefile | cut -d= -f2)
+          VER="${PKG_VERSION}-${PKG_RELEASE}"
+          {
+            echo "PKG_VERSION=$PKG_VERSION"
+            echo "PKG_RELEASE=$PKG_RELEASE"
+            echo "VER=$VER"
+          } >> "$GITHUB_ENV"
 
       - name: Install build tools (awscli, binutils, zstd)
         run: |
@@ -39,7 +49,6 @@ jobs:
         run: |
           set -euxo pipefail
           NAME="${PKG_NAME}"
-          VER="${PKG_VERSION}"
           OUT="${NAME}_${VER}_all.ipk"
 
           # Clean build
@@ -259,7 +268,7 @@ jobs:
         run: |
           set -euo pipefail
           cd build
-          IPK="$(ls -1 ${PKG_NAME}_${PKG_VERSION}_all.ipk)"
+          IPK="$(ls -1 ${PKG_NAME}_${VER}_all.ipk)"
           echo "Inspecting $IPK"
           mkdir -p /tmp/ipkcheck && cd /tmp/ipkcheck
           ar -x "$GITHUB_WORKSPACE/build/$IPK"
@@ -290,14 +299,14 @@ jobs:
         run: |
           set -euxo pipefail
           cd build
-          IPK="${PKG_NAME}_${PKG_VERSION}_all.ipk"
+          IPK="${PKG_NAME}_${VER}_all.ipk"
           SIZE=$(stat -c%s "$IPK")
           MD5=$(md5sum "$IPK" | cut -d' ' -f1)
           SHA256=$(sha256sum "$IPK" | cut -d' ' -f1)
           echo "Package stats: Size=$SIZE, MD5=$MD5"
           cat > Packages <<EOF
           Package: ${PKG_NAME}
-          Version: ${PKG_VERSION}
+          Version: ${VER}
           Architecture: all
           Maintainer: RVInternetHelp <support@rvinternethelp.com>
           Section: net
@@ -332,21 +341,21 @@ jobs:
             --metadata-directive REPLACE
 
           # IPK
-          IPK="${PKG_NAME}_${PKG_VERSION}_all.ipk"
+          IPK="${PKG_NAME}_${VER}_all.ipk"
           aws s3 cp "$IPK" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/octet-stream --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
 
           # Payload tar
-          PAYLOAD="${PKG_NAME}_${PKG_VERSION}_payload.tar.gz"
+          PAYLOAD="${PKG_NAME}_${VER}_payload.tar.gz"
           aws s3 cp "$PAYLOAD" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type application/gzip --cache-control 'no-cache, no-store, must-revalidate' \
             --metadata-directive REPLACE
 
           # Installer script
-          INSTALL="install-${PKG_NAME}-${PKG_VERSION}.sh"
+          INSTALL="install-${PKG_NAME}-${VER}.sh"
           aws s3 cp "$INSTALL" "s3://${R2_BUCKET}/openwrt/23.05/" \
             --endpoint-url "$ENDPOINT" --acl public-read \
             --content-type text/x-shellscript --cache-control 'no-cache, no-store, must-revalidate' \
@@ -361,7 +370,7 @@ jobs:
           echo "Waiting briefly for CDN propagation..."
           sleep 5
           curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/Packages"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${PKG_VERSION}_all.ipk"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${PKG_VERSION}_payload.tar.gz"
-          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/install-${PKG_NAME}-${PKG_VERSION}.sh"
-          echo "Build and upload complete - version ${PKG_VERSION} ready for installation"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${VER}_all.ipk"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/${PKG_NAME}_${VER}_payload.tar.gz"
+          curl -fI "${R2_PUBLIC_BASE}/openwrt/23.05/install-${PKG_NAME}-${VER}.sh"
+          echo "Build and upload complete - version ${VER} ready for installation"

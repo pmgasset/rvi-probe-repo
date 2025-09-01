@@ -25,10 +25,15 @@ install_openwrt(){
     TMP=$(mktemp); URL="${RV_FEED_URL}/${ARCH}/rvi-probe_${PKG_VERSION}-${PKG_RELEASE}_${ARCH}.ipk"
     curl -fsSL "$URL" -o "$TMP"; $SUDO opkg install "$TMP" && rm -f "$TMP"
   }
+  $SUDO opkg install cloudflared || {
+    log "Falling back to direct cloudflared ipk download"; TMPDIR=$(mktemp -d)
+    (cd "$TMPDIR" && opkg download cloudflared && $SUDO opkg install ./*.ipk) && rm -rf "$TMPDIR"
+  }
   $SUDO uci set rviprobe.config.worker_url="$RV_WORKER_URL" || true
   $SUDO uci commit rviprobe || true
   $SUDO /etc/init.d/rvi-probe enable || true
   $SUDO /etc/init.d/rvi-probe start || true
+  $SUDO rvi-cloudflared-check || true
   log "OpenWrt install complete"
 }
 

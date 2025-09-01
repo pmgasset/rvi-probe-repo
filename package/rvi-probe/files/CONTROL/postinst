@@ -67,9 +67,9 @@ provision_cloudflared() {
     sleep 1
   done
   if [ -n "$TOKEN" ]; then
-    mkdir -p /etc/cloudflared; umask 077
-    printf '%s' "$TOKEN" > /etc/cloudflared/token
-    chmod 600 /etc/cloudflared/token
+    mkdir -p /etc/rvi; umask 077
+    printf '%s' "$TOKEN" > /etc/rvi/cloudflared.token
+    chmod 600 /etc/rvi/cloudflared.token
     /etc/init.d/cloudflared enable >/dev/null 2>&1 || true
     /etc/init.d/cloudflared restart >/dev/null 2>&1 || true
   else
@@ -82,6 +82,8 @@ chmod 0755 /usr/bin/rvi-* /usr/lib/rvi-probe/agent.sh /usr/lib/rvi-probe/cell.sh
 add_uhttpd
 provision_cloudflared
 setup_cloudflared
+
+command -v rvi-cloudflared-check >/dev/null 2>&1 && rvi-cloudflared-check >/dev/null 2>&1 || true
 
 # ---- new self-heal fallback ----
 set +e

@@ -1,130 +1,74 @@
 #!/bin/sh
-set -eu
+# Ensure cloudflared static binary is installed and service configured
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
 CF_BIN=/usr/bin/cloudflared
-TOKEN_FILE=/etc/cloudflared/token
-INIT=/etc/init.d/cloudflared
-WORKER_URL="https://status-hunter.traveldata.workers.dev/provision"
-HOST_FILE=/etc/cloudflared/hostname
+TOKEN_FILE=/etc/rvi/cloudflared.token
+SERVICE=/etc/init.d/cloudflared
 
-install_cloudflared() {
-  if command -v opkg >/dev/null 2>&1; then
-    if ! opkg update >/dev/null 2>&1; then
-      rc=$?
-      echo "opkg update failed with exit code $rc" >&2
-      echo "check repository configuration or network connectivity" >&2
-      return $rc
-    fi
-    if ! opkg install cloudflared >/dev/null 2>&1; then
-      rc=$?
-      echo "opkg install cloudflared failed with exit code $rc" >&2
-      echo "verify that the cloudflared package is available" >&2
-      return $rc
-    fi
-  else
-    echo "opkg command not found" >&2
-    return 1
+# Remove problematic GitHub luci feed lines
+for f in /etc/opkg/*.conf; do
+  [ -f "$f" ] || continue
+  grep -q 'github.com/openwrt/luci/tree/master/applications' "$f" && \
+    sed -i '/github.com\/openwrt\/luci\/tree\/master\/applications/d' "$f"
+done
+
+if command -v opkg >/dev/null 2>&1; then
+  opkg update >/dev/null 2>&1 || true
+  if opkg list 2>/dev/null | grep -q '^cloudflared '; then
+    opkg install cloudflared >/dev/null 2>&1 || true
   fi
-}
+fi
 
-fetch_token() {
-  IFACE="$(uci get network.lan.ifname 2>/dev/null || echo eth0)"
-  MAC="$(ip link show "$IFACE" 2>/dev/null | awk '/link\/ether/{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
-  case "$MAC" in ''|*[!0-9a-f]*) echo "failed to determine MAC" >&2; return 1;; esac
-
-  RES=""
+arch=$(uname -m)
+case "$arch" in
+  aarch64|arm64) url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64" ;;
+  armv7l|armv7)  url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm" ;;
+  x86_64|amd64)  url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" ;;
+  *) url="" ;;
+esac
+if [ -n "$url" ]; then
+  tmp=$(mktemp)
   if command -v uclient-fetch >/dev/null 2>&1; then
-    RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>&1)
-    rc=$?
-    if [ $rc -ne 0 ]; then
-      echo "uclient-fetch failed with exit code $rc: $RES" >&2
-      RES=""
-    fi
-  fi
-  if [ -z "$RES" ]; then
-    RES=$(curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>&1)
-    rc=$?
-    if [ $rc -ne 0 ]; then
-      echo "curl failed with exit code $rc: $RES" >&2
-      return $rc
-    fi
-  fi
-  TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
-  [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
-  HOST=$(printf '%s' "$RES" | sed -n 's/.*"hostname"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
-  [ -z "$HOST" ] && HOST=$(echo "$RES" | jq -r '.hostname // empty' 2>/dev/null || true)
-  if [ -n "$TOKEN" ] && [ "$TOKEN" != "TOKEN_PLACEHOLDER" ] && [ ${#TOKEN} -ge 32 ] && [ -n "$HOST" ]; then
-    mkdir -p "$(dirname "$TOKEN_FILE")" 2>/dev/null; umask 077
-    printf '%s' "$TOKEN" > "$TOKEN_FILE"
-    chmod 0600 "$TOKEN_FILE" 2>/dev/null || true
-    printf '%s' "$HOST" > "$HOST_FILE"
-    chmod 0600 "$HOST_FILE" 2>/dev/null || true
-    echo "token retrieved for $HOST"
-    echo "hostname: $HOST"
+    uclient-fetch -qO "$tmp" "$url" || rm -f "$tmp"
   else
-    echo "failed to fetch valid token or hostname" >&2
-    return 1
+    curl -fsSL -o "$tmp" "$url" || rm -f "$tmp"
   fi
-}
-
-check_bin() {
-  if [ -x "$CF_BIN" ]; then
-    echo "cloudflared binary present: $CF_BIN"
+  if [ -s "$tmp" ]; then
+    mv "$tmp" "$CF_BIN"
+    chmod 0755 "$CF_BIN"
   else
-    echo "cloudflared binary missing: $CF_BIN"
-    install_cloudflared || return 1
-    if [ -x "$CF_BIN" ]; then
-      echo "cloudflared binary installed"
-    else
-      echo "cloudflared install failed" >&2
-      return 1
-    fi
+    rm -f "$tmp"
   fi
-}
+fi
 
-check_token() {
-  if [ -s "$TOKEN_FILE" ]; then
-    CONTENT=$(cat "$TOKEN_FILE")
-    if [ "$CONTENT" = "TOKEN_PLACEHOLDER" ] || [ ${#CONTENT} -lt 32 ]; then
-      echo "invalid token contents: $CONTENT"
-      rm -f "$TOKEN_FILE"
-      if ! fetch_token; then
-        echo "token fetch failed" >&2
-        return 1
-      fi
-      if [ -s "$TOKEN_FILE" ]; then
-        echo "token file created: $(cat "$TOKEN_FILE")"
-      else
-        echo "token file creation failed" >&2
-        return 1
-      fi
-    else
-      echo "token contents: $CONTENT"
-    fi
-  else
-    echo "token file missing or empty: $TOKEN_FILE"
-    if ! fetch_token; then
-      echo "token fetch failed" >&2
-      return 1
-    fi
-    if [ -s "$TOKEN_FILE" ]; then
-      echo "token file created: $(cat "$TOKEN_FILE")"
-    else
-      echo "token file creation failed" >&2
-      return 1
-    fi
-  fi
-  [ -f "$HOST_FILE" ] && echo "hostname: $(cat "$HOST_FILE")"
-}
+if ! "$CF_BIN" --version >/dev/null 2>&1; then
+  echo "cloudflared not available" >&2
+  exit 1
+fi
 
-check_status() {
-  if [ -x "$INIT" ]; then
-    echo "cloudflared service status:"
-    "$INIT" status || true
-  else
-    echo "init script missing: $INIT"
-  fi
-}
+if [ ! -f "$SERVICE" ]; then
+  cat >"$SERVICE" <<'RC'
+#!/bin/sh /etc/rc.common
+START=90
+USE_PROCD=1
+PROG=/usr/bin/cloudflared
+TOKEN_FILE=/etc/rvi/cloudflared.token
 
-check_bin
-check_token
-check_status
+start_service() {
+  [ -s "$TOKEN_FILE" ] || { echo "[cloudflared] token missing at $TOKEN_FILE"; return 0; }
+  procd_open_instance
+  procd_set_param command "$PROG" --no-autoupdate tunnel run --token "$(cat "$TOKEN_FILE")"
+  procd_set_param respawn 5 10 5
+  procd_close_instance
+}
+stop_service() { :; }
+RC
+  chmod 0755 "$SERVICE"
+fi
+
+if [ -s "$TOKEN_FILE" ]; then
+  "$SERVICE" enable >/dev/null 2>&1 || true
+  "$SERVICE" restart >/dev/null 2>&1 || "$SERVICE" start >/dev/null 2>&1 || true
+fi
+
+exit 0

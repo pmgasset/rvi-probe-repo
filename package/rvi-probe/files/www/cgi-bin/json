@@ -1,8 +1,26 @@
 #!/bin/sh
+# JSON CGI for rvi-probe (robust WAN/WWAN detection)
 printf "Content-Type: application/json\r\n\r\n"
-HOST=$(hostname); BOARD=$(cat /tmp/sysinfo/board_name 2>/dev/null)
-IF=$(uci -q get network.wan.ifname 2>/dev/null)
-IP=$(ip -4 addr show "$IF" 2>/dev/null | awk '/inet /{print $2}')
-RTT=$(ping -c1 -W1 1.1.1.1 2>/dev/null | awk -F'/' '/rtt/{print $5}')
-VER=$(opkg info rvi-probe 2>/dev/null | awk -F': ' '/Version/{print $2; exit}')
-printf '{"host":"%s","board":"%s","wan_if":"%s","ip":"%s","rtt_ms":"%s","version":"%s"}\n' "$HOST" "$BOARD" "$IF" "$IP" "$RTT" "$VER"
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+HOST="$(uci -q get system.@system[0].hostname)"
+[ -n "$HOST" ] || HOST="$(cat /proc/sys/kernel/hostname 2>/dev/null || echo '')"
+
+BOARD="$(ubus call system board 2>/dev/null | jsonfilter -e '@.board_name' 2>/dev/null)"
+[ -n "$BOARD" ] || BOARD="$(cat /tmp/sysinfo/board_name 2>/dev/null || echo '')"
+
+WAN_IF="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
+[ -n "$WAN_IF" ] || WAN_IF="$(ubus call network.interface dump 2>/dev/null | \
+  jsonfilter -e '@.interface[@.up=true].l3_device' | head -n1)"
+
+IP4=""
+[ -n "$WAN_IF" ] && IP4="$(ip -4 -o addr show dev "$WAN_IF" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+
+RTT="$(ping -c1 -W1 1.1.1.1 2>/dev/null | awk -F'time=' '/time=/{print $2}' | cut -d' ' -f1 | head -n1)"
+
+VER="$(uci -q get rviprobe.@rviprobe[0].version)"
+[ -n "$VER" ] || VER="$(cat /etc/config/rviprobe_version 2>/dev/null || echo '0.5.0-8')"
+
+printf '{"host":"%s","board":"%s","wan_if":"%s","ip":"%s","rtt_ms":"%s","version":"%s"}\n' \
+  "${HOST}" "${BOARD}" "${WAN_IF}" "${IP4}" "${RTT}" "${VER}"

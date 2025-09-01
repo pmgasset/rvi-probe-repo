@@ -58,9 +58,6 @@ install_openwrt(){
     curl -fsSL "$URL" -o "$TMP"
     $SUDO opkg install "$TMP" && rm -f "$TMP"
   }
-  CF_OUT=$($SUDO rvi-cloudflared-check 2>&1) || { rc=$?; log "rvi-cloudflared-check failed: $CF_OUT"; exit $rc; }
-  echo "$CF_OUT"
-  HOSTNAME=$(printf '%s\n' "$CF_OUT" | awk '/hostname:/{print $2}' | tail -n1)
   $SUDO /etc/init.d/cloudflared enable
   $SUDO /etc/init.d/cloudflared start
   $SUDO uci set rviprobe.config.worker_url="$RV_WORKER_URL" || true
@@ -69,7 +66,6 @@ install_openwrt(){
   $SUDO /etc/init.d/rvi-probe start || true
   $SUDO rvi-cloudflared-check >/dev/null || { log "rvi-cloudflared-check failed after start"; exit 1; }
   verify_openwrt_services
-  [ -n "$HOSTNAME" ] && log "Tunnel available at https://$HOSTNAME"
   log "OpenWrt install complete"
 }
 

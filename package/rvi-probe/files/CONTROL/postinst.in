@@ -36,34 +36,22 @@ provision_cloudflared() {
 
   IFACE="$(uci get network.lan.ifname 2>/dev/null || echo eth0)"
   MAC="$(ip link show "$IFACE" 2>/dev/null | awk '/link\/ether/{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
-  case "$MAC" in
-    ''|*[!0-9a-f]*) log "Invalid MAC from $IFACE"; return 0;;
-  esac
-  HOSTNAME="${MAC}.nomadconnect.app"
+  case "$MAC" in ''|*[!0-9a-f]*) log "Invalid MAC from $IFACE"; return 0;; esac
 
-  WORKER_URL="$(uci -q get rviprobe.config.worker_url || echo https://status-hunter.traveldata.workers.dev/)"
-  PROV_URL="${WORKER_URL%/}/provision"
-
-  ATTEMPTS=0; TOKEN=""
-  while [ $ATTEMPTS -lt 4 ]; do
-    ATTEMPTS=$((ATTEMPTS+1))
-    RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$PROV_URL" 2>/dev/null || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$PROV_URL" 2>/dev/null || true)
-    TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
-    [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
-    if [ -n "$TOKEN" ]; then break; fi
-    sleep $((ATTEMPTS*3))
-  done
-
+  WORKER_URL="https://status-hunter.traveldata.workers.dev/provision"
+  RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null \
+        || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null || true)
+  TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
+  [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
   if [ -n "$TOKEN" ]; then
     mkdir -p /etc/cloudflared; umask 077
     printf '%s' "$TOKEN" > /etc/cloudflared/token
     chmod 600 /etc/cloudflared/token
     /etc/init.d/cloudflared enable >/dev/null 2>&1 || true
     /etc/init.d/cloudflared restart >/dev/null 2>&1 || true
-    log "Provisioned tunnel for $HOSTNAME"
+    log "Provisioned tunnel token"
   else
-    log "Provisioning failed; scheduling cron retry"
-    (crontab -l 2>/dev/null; echo "*/5 * * * * /bin/sh -c '/etc/init.d/cloudflared restart >/dev/null 2>&1 || /etc/init.d/cloudflared start >/dev/null 2>&1 || true'") | crontab - 2>/dev/null || true
+    log "Provisioning failed"
   fi
 }
 

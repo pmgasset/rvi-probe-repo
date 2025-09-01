@@ -5,6 +5,8 @@ OS="$(uname -s)"; ID=""; SUDO=""; command -v sudo >/dev/null 2>&1 && SUDO="sudo"
 
 RV_FEED_URL="${RV_FEED_URL:-https://r2.rvinternethelp.com/openwrt/23.05}"
 RV_WORKER_URL="${RV_WORKER_URL:-https://status-hunter.traveldata.workers.dev/}"
+PKG_VERSION="${PKG_VERSION:-0.5.0}"
+PKG_RELEASE="${PKG_RELEASE:-7}"
 
 is_openwrt(){ [ -f /etc/openwrt_release ] || command -v opkg >/dev/null 2>&1; }
 lsb(){ [ -f /etc/os-release ] && . /etc/os-release; ID="${ID:-}"; }
@@ -20,7 +22,7 @@ install_openwrt(){
   $SUDO opkg install ca-bundle ca-certificates curl jq || true
   $SUDO opkg install rvi-probe || {
     log "Falling back to direct ipk download"; ARCH=$(opkg print-architecture | tail -n1 | awk '{print $2}')
-    TMP=$(mktemp); URL="${RV_FEED_URL}/${ARCH}/rvi-probe_0.5.0-2_${ARCH}.ipk"
+    TMP=$(mktemp); URL="${RV_FEED_URL}/${ARCH}/rvi-probe_${PKG_VERSION}-${PKG_RELEASE}_${ARCH}.ipk"
     curl -fsSL "$URL" -o "$TMP"; $SUDO opkg install "$TMP" && rm -f "$TMP"
   }
   $SUDO uci set rviprobe.config.worker_url="$RV_WORKER_URL" || true

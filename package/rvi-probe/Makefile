@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=rvi-probe
 PKG_VERSION:=0.5.0
-PKG_RELEASE:=1
+PKG_RELEASE:=7
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=RVInternetHelp <support@rvinternethelp.com>
 PKGARCH:=all
@@ -14,7 +14,7 @@ define Package/rvi-probe
   CATEGORY:=Network
   SUBMENU:=Monitoring
   TITLE:=RVInternetHelp Network Probe
-  DEPENDS:=+curl +ca-bundle +ca-certificates +jq +ip-full +ubus +uclient-fetch +iwinfo +wireless-tools +openssl-util
+  DEPENDS:=+curl +ca-bundle +ca-certificates +jq +ip-full +ubus +uclient-fetch +iwinfo +wireless-tools +openssl-util +cloudflared
   # If you want uhttpd to be auto-installed too, uncomment:
   # DEPENDS+= +uhttpd
 endef
@@ -38,10 +38,11 @@ define Package/rvi-probe/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/rvi-probe $(1)/etc/init.d/rvi-probe
 
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) ./files/usr/bin/rvi-probe     $(1)/usr/bin/rvi-probe
-	$(INSTALL_BIN) ./files/usr/bin/rvi-speedtest $(1)/usr/bin/rvi-speedtest
-	$(INSTALL_BIN) ./files/usr/bin/rvi-sharecode $(1)/usr/bin/rvi-sharecode
+        $(INSTALL_DIR) $(1)/usr/bin
+        $(INSTALL_BIN) ./files/usr/bin/rvi-probe     $(1)/usr/bin/rvi-probe
+        $(INSTALL_BIN) ./files/usr/bin/rvi-speedtest $(1)/usr/bin/rvi-speedtest
+        $(INSTALL_BIN) ./files/usr/bin/rvi-sharecode $(1)/usr/bin/rvi-sharecode
+        $(INSTALL_BIN) ./files/usr/bin/rvi-cloudflared-check $(1)/usr/bin/rvi-cloudflared-check
 
 	$(INSTALL_DIR) $(1)/usr/lib/rvi-probe
 	$(INSTALL_BIN) ./files/usr/lib/rvi-probe/agent.sh $(1)/usr/lib/rvi-probe/agent.sh

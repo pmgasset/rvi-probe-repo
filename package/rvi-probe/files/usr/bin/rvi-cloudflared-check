@@ -4,6 +4,7 @@ CF_BIN=/usr/bin/cloudflared
 TOKEN_FILE=/etc/cloudflared/token
 INIT=/etc/init.d/cloudflared
 WORKER_URL="https://status-hunter.traveldata.workers.dev/provision"
+HOST_FILE=/etc/cloudflared/hostname
 
 install_cloudflared() {
   if command -v opkg >/dev/null 2>&1; then
@@ -49,13 +50,18 @@ fetch_token() {
   fi
   TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
   [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
-  if [ -n "$TOKEN" ] && [ "$TOKEN" != "TOKEN_PLACEHOLDER" ] && [ ${#TOKEN} -ge 32 ]; then
+  HOST=$(printf '%s' "$RES" | sed -n 's/.*"hostname"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
+  [ -z "$HOST" ] && HOST=$(echo "$RES" | jq -r '.hostname // empty' 2>/dev/null || true)
+  if [ -n "$TOKEN" ] && [ "$TOKEN" != "TOKEN_PLACEHOLDER" ] && [ ${#TOKEN} -ge 32 ] && [ -n "$HOST" ]; then
     mkdir -p "$(dirname "$TOKEN_FILE")" 2>/dev/null; umask 077
     printf '%s' "$TOKEN" > "$TOKEN_FILE"
     chmod 0600 "$TOKEN_FILE" 2>/dev/null || true
-    echo "token retrieved"
+    printf '%s' "$HOST" > "$HOST_FILE"
+    chmod 0600 "$HOST_FILE" 2>/dev/null || true
+    echo "token retrieved for $HOST"
+    echo "hostname: $HOST"
   else
-    echo "failed to fetch valid token" >&2
+    echo "failed to fetch valid token or hostname" >&2
     return 1
   fi
 }
@@ -107,6 +113,7 @@ check_token() {
       return 1
     fi
   fi
+  [ -f "$HOST_FILE" ] && echo "hostname: $(cat "$HOST_FILE")"
 }
 
 check_status() {

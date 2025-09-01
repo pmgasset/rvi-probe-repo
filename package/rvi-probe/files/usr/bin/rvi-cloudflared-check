@@ -5,28 +5,66 @@ TOKEN_FILE=/etc/cloudflared/token
 INIT=/etc/init.d/cloudflared
 WORKER_URL="https://status-hunter.traveldata.workers.dev/provision"
 HOST_FILE=/etc/cloudflared/hostname
+CF_FEED_URL="${CF_FEED_URL:-https://r2.rvinternethelp.com/cloudflared}"
+CF_VERSION="${CF_VERSION:-2024.6.0}"
+CF_RELEASE="${CF_RELEASE:-1}"
+
+echo "Starting rvi-cloudflared-check..."
 
 install_cloudflared() {
+  echo "Starting cloudflared installation..."
   if command -v opkg >/dev/null 2>&1; then
-    if ! opkg update >/dev/null 2>&1; then
+    echo "Updating package lists..."
+    if opkg update >/tmp/cloudflared-opkg.log 2>&1; then
+      echo "Package lists updated"
+      echo "Installing cloudflared package..."
+      if ! opkg install cloudflared >>/tmp/cloudflared-opkg.log 2>&1; then
+        rc=$?
+        cat /tmp/cloudflared-opkg.log >&2
+        echo "opkg install cloudflared failed with exit code $rc" >&2
+        echo "verify that the cloudflared package is available" >&2
+        rm -f /tmp/cloudflared-opkg.log
+        return $rc
+      fi
+      rm -f /tmp/cloudflared-opkg.log
+      echo "cloudflared package installed"
+    else
       rc=$?
+      cat /tmp/cloudflared-opkg.log >&2
       echo "opkg update failed with exit code $rc" >&2
       echo "check repository configuration or network connectivity" >&2
-      return $rc
-    fi
-    if ! opkg install cloudflared >/dev/null 2>&1; then
-      rc=$?
-      echo "opkg install cloudflared failed with exit code $rc" >&2
-      echo "verify that the cloudflared package is available" >&2
-      return $rc
+      echo "Attempting fallback download of cloudflared..."
+      ARCH=$(opkg print-architecture | tail -n1 | awk '{print $2}')
+      TMP=$(mktemp)
+      URL="${CF_FEED_URL}/${ARCH}/cloudflared_${CF_VERSION}-${CF_RELEASE}_${ARCH}.ipk"
+      if curl -fsSL "$URL" -o "$TMP"; then
+        echo "Installing cloudflared from fallback package..."
+        if opkg install "$TMP" >>/tmp/cloudflared-opkg.log 2>&1; then
+          echo "cloudflared installed from fallback package"
+          rm -f "$TMP" /tmp/cloudflared-opkg.log
+        else
+          rc=$?
+          cat /tmp/cloudflared-opkg.log >&2
+          echo "fallback opkg install failed with exit code $rc" >&2
+          rm -f "$TMP" /tmp/cloudflared-opkg.log
+          return $rc
+        fi
+      else
+        rc=$?
+        echo "fallback download failed with exit code $rc" >&2
+        rm -f "$TMP" /tmp/cloudflared-opkg.log
+        return $rc
+      fi
     fi
   else
     echo "opkg command not found" >&2
     return 1
   fi
+  return 0
 }
 
 fetch_token() {
+  echo "Fetching tunnel token..."
   IFACE="$(uci get network.lan.ifname 2>/dev/null || echo eth0)"
   MAC="$(ip link show "$IFACE" 2>/dev/null | awk '/link\/ether/{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
   case "$MAC" in ''|*[!0-9a-f]*) echo "failed to determine MAC" >&2; return 1;; esac
@@ -67,6 +105,7 @@ fetch_token() {
 }
 
 check_bin() {
+  echo "Checking cloudflared binary..."
   if [ -x "$CF_BIN" ]; then
     echo "cloudflared binary present: $CF_BIN"
   else
@@ -82,6 +121,7 @@ check_bin() {
 }
 
 check_token() {
+  echo "Checking token file..."
   if [ -s "$TOKEN_FILE" ]; then
     CONTENT=$(cat "$TOKEN_FILE")
     if [ "$CONTENT" = "TOKEN_PLACEHOLDER" ] || [ ${#CONTENT} -lt 32 ]; then
@@ -117,6 +157,7 @@ check_token() {
 }
 
 check_status() {
+  echo "Checking cloudflared service status..."
   if [ -x "$INIT" ]; then
     echo "cloudflared service status:"
     "$INIT" status || true
@@ -128,3 +169,4 @@ check_status() {
 check_bin
 check_token
 check_status
+echo "rvi-cloudflared-check completed"

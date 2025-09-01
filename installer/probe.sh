@@ -20,12 +20,12 @@ verify_openwrt_services(){
   uhttpd=$(uci get uhttpd.rvi.listen_http 2>/dev/null || true)
   uhttpd=${uhttpd:-127.0.0.1:8081}
   sleep 5
-  curl -fsS --max-time 5 "http://$metrics/ready" >/dev/null || {
-    log "cloudflared not ready at $metrics"; exit 1; }
+  status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$metrics/ready" || true)
+  [ "$status" -eq 200 ] || { log "cloudflared not ready at $metrics (status $status)"; exit 1; }
   resp=$(curl -fsS --max-time 5 "http://$uhttpd/json" 2>/dev/null) || {
     log "probe HTTP check failed at $uhttpd"; exit 1; }
   if command -v jq >/dev/null 2>&1; then
-    echo "$resp" | jq . >/dev/null || { log "invalid JSON from probe"; exit 1; }
+    echo "$resp" | jq empty >/dev/null || { log "invalid JSON from probe"; exit 1; }
   else
     echo "$resp" | grep -q '{' || { log "invalid JSON from probe"; exit 1; }
   fi

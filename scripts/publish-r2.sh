@@ -4,8 +4,8 @@ set -euo pipefail
 OUT=${1:-bin/packages}
 
 PKG_MK=$(cd "$(dirname "$0")/.."; pwd)/package/rvi-probe/Makefile
-PKG_VERSION=$(grep '^PKG_VERSION:=' "$PKG_MK" | cut -d':=' -f2 | tr -d ' \t')
-PKG_RELEASE=$(grep '^PKG_RELEASE:=' "$PKG_MK" | cut -d':=' -f2 | tr -d ' \t')
+PKG_VERSION=$(grep '^PKG_VERSION:=' "$PKG_MK" | awk -F ':=' '{print $2}' | tr -d ' \t')
+PKG_RELEASE=$(grep '^PKG_RELEASE:=' "$PKG_MK" | awk -F ':=' '{print $2}' | tr -d ' \t')
 PKG_VER="${PKG_VERSION}-${PKG_RELEASE}"
 
 # Generate versioned installer script and copy IPK to the output root

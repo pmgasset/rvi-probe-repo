@@ -54,10 +54,18 @@ provision_cloudflared() {
   case "$MAC" in ''|*[!0-9a-f]*) echo "Invalid MAC from $IFACE"; return 0;; esac
 
   WORKER_URL="https://status-hunter.traveldata.workers.dev/provision"
-  RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null \
-        || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null || true)
-  TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
-  [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
+  TOKEN=""
+  for _ in 1 2 3; do
+    RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null \
+          || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null || true)
+    T=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
+    [ -z "$T" ] && T=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
+    if [ -n "$T" ] && [ "$T" != "TOKEN_PLACEHOLDER" ] && [ ${#T} -ge 32 ]; then
+      TOKEN="$T"
+      break
+    fi
+    sleep 1
+  done
   if [ -n "$TOKEN" ]; then
     mkdir -p /etc/cloudflared; umask 077
     printf '%s' "$TOKEN" > /etc/cloudflared/token

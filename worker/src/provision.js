@@ -55,7 +55,7 @@ export default {
       // Retrieve connector token
       const tokenRes = await cfFetch(env, `/accounts/${ACCOUNT_ID}/cfd_tunnel/${tunnelId}/token`, { method: 'GET' });
       const token = tokenRes?.result;
-      if (typeof token !== 'string' || token.length < 32) {
+      if (typeof token !== 'string' || token.length < 32 || token === 'TOKEN_PLACEHOLDER') {
         console.error('Token fetch failed', tokenRes);
         return json({ error: 'Failed to retrieve token' }, 502);
       }

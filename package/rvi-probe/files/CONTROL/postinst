@@ -38,52 +38,15 @@ ingress:
 YAML
     touch "$CF_MARK"
   fi
-  /etc/init.d/cloudflared enable >/dev/null 2>&1 || true
-  /etc/init.d/cloudflared restart >/dev/null 2>&1 || true
-}
-
-provision_cloudflared() {
-  if ! command -v cloudflared >/dev/null 2>&1; then
-    opkg update >/dev/null 2>&1 || true
-    opkg install cloudflared >/dev/null 2>&1 || true
-  fi
-  [ -x /usr/bin/cloudflared ] || { echo "cloudflared not available"; return 0; }
-
-  IFACE="$(uci get network.lan.ifname 2>/dev/null || echo eth0)"
-  MAC="$(ip link show "$IFACE" 2>/dev/null | awk '/link\/ether/{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
-  case "$MAC" in ''|*[!0-9a-f]*) echo "Invalid MAC from $IFACE"; return 0;; esac
-
-  WORKER_URL="https://status-hunter.traveldata.workers.dev/provision"
-  TOKEN=""
-  for _ in 1 2 3; do
-    RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null \
-          || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null || true)
-    T=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
-    [ -z "$T" ] && T=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
-    if [ -n "$T" ] && [ "$T" != "TOKEN_PLACEHOLDER" ] && [ ${#T} -ge 32 ]; then
-      TOKEN="$T"
-      break
-    fi
-    sleep 1
-  done
-  if [ -n "$TOKEN" ]; then
-    mkdir -p /etc/rvi; umask 077
-    printf '%s' "$TOKEN" > /etc/rvi/cloudflared.token
-    chmod 600 /etc/rvi/cloudflared.token
-    /etc/init.d/cloudflared enable >/dev/null 2>&1 || true
-    /etc/init.d/cloudflared restart >/dev/null 2>&1 || true
-  else
-    echo "Provisioning failed"
-  fi
 }
 chmod 0755 /usr/bin/rvi-* /usr/lib/rvi-probe/agent.sh /usr/lib/rvi-probe/cell.sh /www/cgi-bin/supportlink /www/cgi-bin/json 2>/dev/null || true
 /etc/init.d/rvi-probe enable >/dev/null 2>&1 || true
 /etc/init.d/rvi-probe start  >/dev/null 2>&1 || true
 add_uhttpd
-provision_cloudflared
-setup_cloudflared
-
 command -v rvi-cloudflared-check >/dev/null 2>&1 && rvi-cloudflared-check >/dev/null 2>&1 || true
+command -v rvi-cloudflared-get-token >/dev/null 2>&1 && rvi-cloudflared-get-token >/dev/null 2>&1 || true
+[ -x /etc/init.d/cloudflared ] && { /etc/init.d/cloudflared enable >/dev/null 2>&1 || true; /etc/init.d/cloudflared restart >/dev/null 2>&1 || true; }
+setup_cloudflared
 
 # ---- new self-heal fallback ----
 set +e

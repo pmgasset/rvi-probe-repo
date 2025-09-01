@@ -5,6 +5,7 @@ PROG=/usr/bin/cloudflared
 TOKEN_FILE=/etc/rvi/cloudflared.token
 
 start_service() {
+  /usr/bin/rvi-cloudflared-get-token >/dev/null 2>&1 || true
   [ -s "$TOKEN_FILE" ] || { echo "[cloudflared] token missing at $TOKEN_FILE"; return 0; }
   procd_open_instance
   procd_set_param command "$PROG" --no-autoupdate tunnel run --token "$(cat "$TOKEN_FILE")"

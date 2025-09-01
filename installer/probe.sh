@@ -58,14 +58,16 @@ install_openwrt(){
     curl -fsSL "$URL" -o "$TMP"
     $SUDO opkg install "$TMP" && rm -f "$TMP"
   }
-  $SUDO /etc/init.d/cloudflared enable
-  $SUDO /etc/init.d/cloudflared start
+    $SUDO rvi-cloudflared-check >/dev/null || { log "rvi-cloudflared-check failed"; exit 1; }
+    [ -x /usr/bin/rvi-cloudflared-get-token ] && $SUDO chmod 0755 /usr/bin/rvi-cloudflared-get-token
+    $SUDO rvi-cloudflared-get-token >/dev/null || true
+    $SUDO /etc/init.d/cloudflared enable
+    $SUDO /etc/init.d/cloudflared restart
   $SUDO uci set rviprobe.config.worker_url="$RV_WORKER_URL" || true
   $SUDO uci commit rviprobe || true
   $SUDO /etc/init.d/rvi-probe enable || true
   $SUDO /etc/init.d/rvi-probe start || true
-  $SUDO rvi-cloudflared-check >/dev/null || { log "rvi-cloudflared-check failed after start"; exit 1; }
-  verify_openwrt_services
+    verify_openwrt_services
   log "OpenWrt install complete"
 }
 

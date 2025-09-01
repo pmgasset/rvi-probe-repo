@@ -5,9 +5,9 @@
 
 set -u
 LOG=/tmp/rvi-cloudflared-get-token.log
-# Worker root (don’t include /token here)
+# Worker root (don’t include /provision here)
 WRK_ROOT="https://rvi-provision.traveldata.workers.dev"
-WRK="$WRK_ROOT/token"
+WRK="$WRK_ROOT/provision"
 STATE_DIR="/etc/rvi"
 TOKEN_FILE="$STATE_DIR/cloudflared.token"
 TUNNEL_FILE="$STATE_DIR/cloudflared.tunnel_id"

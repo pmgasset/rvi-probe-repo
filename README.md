@@ -13,8 +13,10 @@ OpenWrt/FriendlyWrt probe package + universal installer.
 
 Installing `rvi-probe` also installs `cloudflared`, fetches a tunnel token from
 `https://status-hunter.traveldata.workers.dev/provision`, and enables the
-tunnel automatically. Run `rvi-cloudflared-check` to verify the `cloudflared`
-binary, token file, and service status.
+tunnel automatically. The installer downloads a `cloudflared` IPK for the
+device architecture from `https://r2.rvinternethelp.com/cloudflared/` (configurable
+via `CF_FEED_URL`) and then runs `rvi-cloudflared-check` to verify the
+`cloudflared` binary, token file, and service status.
 
 ## Quick start (local build)
 1. Download the OpenWrt SDK matching any target (we build `noarch`): e.g. x86_64 SDK 23.05.3.

@@ -9,8 +9,6 @@ OpenWrt/FriendlyWrt probe package + universal installer.
 - Optional feed signing via `usign`
 - Cloudflared tunnel check via `rvi-cloudflared-check`
 
-Releases follow a `PKG_VERSION-PKG_RELEASE` scheme (e.g., `0.5.0-7`).
-
 ## Cloudflared check
 
 Installing `rvi-probe` also installs `cloudflared`, fetches a tunnel token from
@@ -28,6 +26,7 @@ binary, token file, and service status.
 4. Run `scripts/mk-packages-index.sh <sdk-dir>/bin/packages`.
 
 5. Run `scripts/publish-r2.sh <sdk-dir>/bin/packages`.
+
 
 ## Package verification
 

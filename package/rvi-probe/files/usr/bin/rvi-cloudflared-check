@@ -7,7 +7,21 @@ WORKER_URL="https://status-hunter.traveldata.workers.dev/provision"
 
 install_cloudflared() {
   if command -v opkg >/dev/null 2>&1; then
-    opkg update >/dev/null 2>&1 && opkg install cloudflared >/dev/null 2>&1 || true
+    if ! opkg update >/dev/null 2>&1; then
+      rc=$?
+      echo "opkg update failed with exit code $rc" >&2
+      echo "check repository configuration or network connectivity" >&2
+      return $rc
+    fi
+    if ! opkg install cloudflared >/dev/null 2>&1; then
+      rc=$?
+      echo "opkg install cloudflared failed with exit code $rc" >&2
+      echo "verify that the cloudflared package is available" >&2
+      return $rc
+    fi
+  else
+    echo "opkg command not found" >&2
+    return 1
   fi
 }
 
@@ -16,8 +30,23 @@ fetch_token() {
   MAC="$(ip link show "$IFACE" 2>/dev/null | awk '/link\/ether/{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
   case "$MAC" in ''|*[!0-9a-f]*) echo "failed to determine MAC" >&2; return 1;; esac
 
-  RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null \
-        || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null || true)
+  RES=""
+  if command -v uclient-fetch >/dev/null 2>&1; then
+    RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>&1)
+    rc=$?
+    if [ $rc -ne 0 ]; then
+      echo "uclient-fetch failed with exit code $rc: $RES" >&2
+      RES=""
+    fi
+  fi
+  if [ -z "$RES" ]; then
+    RES=$(curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>&1)
+    rc=$?
+    if [ $rc -ne 0 ]; then
+      echo "curl failed with exit code $rc: $RES" >&2
+      return $rc
+    fi
+  fi
   TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
   [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
   if [ -n "$TOKEN" ] && [ "$TOKEN" != "TOKEN_PLACEHOLDER" ] && [ ${#TOKEN} -ge 32 ]; then
@@ -36,8 +65,13 @@ check_bin() {
     echo "cloudflared binary present: $CF_BIN"
   else
     echo "cloudflared binary missing: $CF_BIN"
-    install_cloudflared
-    [ -x "$CF_BIN" ] && echo "cloudflared binary installed" || echo "cloudflared install failed"
+    install_cloudflared || return 1
+    if [ -x "$CF_BIN" ]; then
+      echo "cloudflared binary installed"
+    else
+      echo "cloudflared install failed" >&2
+      return 1
+    fi
   fi
 }
 
@@ -47,15 +81,31 @@ check_token() {
     if [ "$CONTENT" = "TOKEN_PLACEHOLDER" ] || [ ${#CONTENT} -lt 32 ]; then
       echo "invalid token contents: $CONTENT"
       rm -f "$TOKEN_FILE"
-      fetch_token || echo "token fetch failed" >&2
-      [ -s "$TOKEN_FILE" ] && echo "token file created: $(cat "$TOKEN_FILE")"
+      if ! fetch_token; then
+        echo "token fetch failed" >&2
+        return 1
+      fi
+      if [ -s "$TOKEN_FILE" ]; then
+        echo "token file created: $(cat "$TOKEN_FILE")"
+      else
+        echo "token file creation failed" >&2
+        return 1
+      fi
     else
       echo "token contents: $CONTENT"
     fi
   else
     echo "token file missing or empty: $TOKEN_FILE"
-    fetch_token || echo "token fetch failed" >&2
-    [ -s "$TOKEN_FILE" ] && echo "token file created: $(cat "$TOKEN_FILE")"
+    if ! fetch_token; then
+      echo "token fetch failed" >&2
+      return 1
+    fi
+    if [ -s "$TOKEN_FILE" ]; then
+      echo "token file created: $(cat "$TOKEN_FILE")"
+    else
+      echo "token file creation failed" >&2
+      return 1
+    fi
   fi
 }
 

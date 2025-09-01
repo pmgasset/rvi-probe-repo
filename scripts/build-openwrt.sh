@@ -6,8 +6,8 @@ ARCH=${2:-x86_64}
 
 # Locate source dir and parse package version
 PKG_SRC_DIR=$(cd "$(dirname "$0")/.."; pwd)/package/rvi-probe
-PKG_VERSION=$(grep '^PKG_VERSION:=' "$PKG_SRC_DIR/Makefile" | cut -d':=' -f2 | tr -d ' \t')
-PKG_RELEASE=$(grep '^PKG_RELEASE:=' "$PKG_SRC_DIR/Makefile" | cut -d':=' -f2 | tr -d ' \t')
+PKG_VERSION=$(grep '^PKG_VERSION:=' "$PKG_SRC_DIR/Makefile" | cut -d '=' -f2 | tr -d ' \t')
+PKG_RELEASE=$(grep '^PKG_RELEASE:=' "$PKG_SRC_DIR/Makefile" | cut -d '=' -f2 | tr -d ' \t')
 PKG_VER="${PKG_VERSION}-${PKG_RELEASE}"
 
 cd "$SDK_DIR"; ./scripts/feeds update -a && ./scripts/feeds install -a

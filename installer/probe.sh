@@ -7,6 +7,9 @@ RV_FEED_URL="${RV_FEED_URL:-https://r2.rvinternethelp.com/openwrt/23.05}"
 RV_WORKER_URL="${RV_WORKER_URL:-https://status-hunter.traveldata.workers.dev/}"
 PKG_VERSION="${PKG_VERSION:-0.5.0}"
 PKG_RELEASE="${PKG_RELEASE:-8}"
+CF_FEED_URL="${CF_FEED_URL:-https://r2.rvinternethelp.com/cloudflared}"
+CF_VERSION="${CF_VERSION:-2024.6.0}"
+CF_RELEASE="${CF_RELEASE:-1}"
 
 is_openwrt(){ [ -f /etc/openwrt_release ] || command -v opkg >/dev/null 2>&1; }
 lsb(){ [ -f /etc/os-release ] && . /etc/os-release; ID="${ID:-}"; }
@@ -26,8 +29,12 @@ install_openwrt(){
     curl -fsSL "$URL" -o "$TMP"; $SUDO opkg install "$TMP" && rm -f "$TMP"
   }
   $SUDO opkg install cloudflared || {
-    log "Falling back to direct cloudflared ipk download"; TMPDIR=$(mktemp -d)
-    (cd "$TMPDIR" && opkg download cloudflared && $SUDO opkg install ./*.ipk) && rm -rf "$TMPDIR"
+    log "Falling back to direct cloudflared ipk download"
+    ARCH=$(opkg print-architecture | tail -n1 | awk '{print $2}')
+    TMP=$(mktemp)
+    URL="${CF_FEED_URL}/${ARCH}/cloudflared_${CF_VERSION}-${CF_RELEASE}_${ARCH}.ipk"
+    curl -fsSL "$URL" -o "$TMP"
+    $SUDO opkg install "$TMP" && rm -f "$TMP"
   }
   $SUDO uci set rviprobe.config.worker_url="$RV_WORKER_URL" || true
   $SUDO uci commit rviprobe || true

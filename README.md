@@ -7,6 +7,13 @@ OpenWrt/FriendlyWrt probe package + universal installer.
 - Cell metrics via `uqmi`/`mmcli`
 - JSON status at `/json`
 - Optional feed signing via `usign`
+- Cloudflared tunnel check via `rvi-cloudflared-check`
+
+## Cloudflared check
+
+Run `rvi-cloudflared-check` to ensure the `cloudflared` binary, token file, and
+service are present. Missing components are installed or stubbed
+automatically.
 
 ## Quick start (local build)
 1. Download the OpenWrt SDK matching any target (we build `noarch`): e.g. x86_64 SDK 23.05.3.

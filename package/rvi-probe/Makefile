@@ -38,10 +38,11 @@ define Package/rvi-probe/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/rvi-probe $(1)/etc/init.d/rvi-probe
 
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) ./files/usr/bin/rvi-probe     $(1)/usr/bin/rvi-probe
-	$(INSTALL_BIN) ./files/usr/bin/rvi-speedtest $(1)/usr/bin/rvi-speedtest
-	$(INSTALL_BIN) ./files/usr/bin/rvi-sharecode $(1)/usr/bin/rvi-sharecode
+        $(INSTALL_DIR) $(1)/usr/bin
+        $(INSTALL_BIN) ./files/usr/bin/rvi-probe     $(1)/usr/bin/rvi-probe
+        $(INSTALL_BIN) ./files/usr/bin/rvi-speedtest $(1)/usr/bin/rvi-speedtest
+        $(INSTALL_BIN) ./files/usr/bin/rvi-sharecode $(1)/usr/bin/rvi-sharecode
+        $(INSTALL_BIN) ./files/usr/bin/rvi-cloudflared-check $(1)/usr/bin/rvi-cloudflared-check
 
 	$(INSTALL_DIR) $(1)/usr/lib/rvi-probe
 	$(INSTALL_BIN) ./files/usr/lib/rvi-probe/agent.sh $(1)/usr/lib/rvi-probe/agent.sh

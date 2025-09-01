@@ -3,6 +3,7 @@ set -eu
 CF_BIN=/usr/bin/cloudflared
 TOKEN_FILE=/etc/cloudflared/token
 INIT=/etc/init.d/cloudflared
+WORKER_URL="https://status-hunter.traveldata.workers.dev/provision"
 
 install_cloudflared() {
   if command -v opkg >/dev/null 2>&1; then
@@ -10,11 +11,23 @@ install_cloudflared() {
   fi
 }
 
-ensure_token_file() {
-  mkdir -p $(dirname "$TOKEN_FILE") 2>/dev/null
-  if [ ! -f "$TOKEN_FILE" ]; then
-    echo "TOKEN_PLACEHOLDER" > "$TOKEN_FILE"
+fetch_token() {
+  IFACE="$(uci get network.lan.ifname 2>/dev/null || echo eth0)"
+  MAC="$(ip link show "$IFACE" 2>/dev/null | awk '/link\/ether/{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')"
+  case "$MAC" in ''|*[!0-9a-f]*) echo "failed to determine MAC" >&2; return 1;; esac
+
+  RES=$(uclient-fetch -qO- -H 'Content-Type: application/json' -X POST -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null \
+        || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null || true)
+  TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
+  [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
+  if [ -n "$TOKEN" ]; then
+    mkdir -p "$(dirname "$TOKEN_FILE")" 2>/dev/null; umask 077
+    printf '%s' "$TOKEN" > "$TOKEN_FILE"
     chmod 0600 "$TOKEN_FILE" 2>/dev/null || true
+    echo "token retrieved"
+  else
+    echo "failed to fetch token" >&2
+    return 1
   fi
 }
 
@@ -33,10 +46,8 @@ check_token() {
     echo "token contents: $(cat "$TOKEN_FILE")"
   else
     echo "token file missing or empty: $TOKEN_FILE"
-    ensure_token_file
-    if [ -s "$TOKEN_FILE" ]; then
-      echo "token file created: $(cat "$TOKEN_FILE")"
-    fi
+    fetch_token || echo "token fetch failed" >&2
+    [ -s "$TOKEN_FILE" ] && echo "token file created: $(cat "$TOKEN_FILE")"
   fi
 }
 

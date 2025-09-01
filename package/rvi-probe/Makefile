@@ -14,7 +14,7 @@ define Package/rvi-probe
   CATEGORY:=Network
   SUBMENU:=Monitoring
   TITLE:=RVInternetHelp Network Probe
-  DEPENDS:=+curl +ca-bundle +ca-certificates +jq +ip-full +ubus +uclient-fetch +iwinfo +wireless-tools +openssl-util
+  DEPENDS:=+curl +ca-bundle +ca-certificates +jq +ip-full +ubus +uclient-fetch +iwinfo +wireless-tools +openssl-util +cloudflared
   # If you want uhttpd to be auto-installed too, uncomment:
   # DEPENDS+= +uhttpd
 endef

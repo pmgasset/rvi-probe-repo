@@ -20,13 +20,13 @@ fetch_token() {
         || curl -fsS -H 'Content-Type: application/json' -d "{\"mac\":\"$MAC\"}" "$WORKER_URL" 2>/dev/null || true)
   TOKEN=$(printf '%s' "$RES" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]\+\)".*/\1/p' | head -n1)
   [ -z "$TOKEN" ] && TOKEN=$(echo "$RES" | jq -r '.token // empty' 2>/dev/null || true)
-  if [ -n "$TOKEN" ]; then
+  if [ -n "$TOKEN" ] && [ "$TOKEN" != "TOKEN_PLACEHOLDER" ] && [ ${#TOKEN} -ge 32 ]; then
     mkdir -p "$(dirname "$TOKEN_FILE")" 2>/dev/null; umask 077
     printf '%s' "$TOKEN" > "$TOKEN_FILE"
     chmod 0600 "$TOKEN_FILE" 2>/dev/null || true
     echo "token retrieved"
   else
-    echo "failed to fetch token" >&2
+    echo "failed to fetch valid token" >&2
     return 1
   fi
 }
@@ -43,7 +43,15 @@ check_bin() {
 
 check_token() {
   if [ -s "$TOKEN_FILE" ]; then
-    echo "token contents: $(cat "$TOKEN_FILE")"
+    CONTENT=$(cat "$TOKEN_FILE")
+    if [ "$CONTENT" = "TOKEN_PLACEHOLDER" ] || [ ${#CONTENT} -lt 32 ]; then
+      echo "invalid token contents: $CONTENT"
+      rm -f "$TOKEN_FILE"
+      fetch_token || echo "token fetch failed" >&2
+      [ -s "$TOKEN_FILE" ] && echo "token file created: $(cat "$TOKEN_FILE")"
+    else
+      echo "token contents: $CONTENT"
+    fi
   else
     echo "token file missing or empty: $TOKEN_FILE"
     fetch_token || echo "token fetch failed" >&2

@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=rvi-probe
 PKG_VERSION:=0.5.0
-PKG_RELEASE:=7
+PKG_RELEASE:=8
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=RVInternetHelp <support@rvinternethelp.com>
 PKGARCH:=all

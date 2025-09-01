@@ -6,7 +6,7 @@ OS="$(uname -s)"; ID=""; SUDO=""; command -v sudo >/dev/null 2>&1 && SUDO="sudo"
 RV_FEED_URL="${RV_FEED_URL:-https://r2.rvinternethelp.com/openwrt/23.05}"
 RV_WORKER_URL="${RV_WORKER_URL:-https://status-hunter.traveldata.workers.dev/}"
 PKG_VERSION="${PKG_VERSION:-0.5.0}"
-PKG_RELEASE="${PKG_RELEASE:-7}"
+PKG_RELEASE="${PKG_RELEASE:-8}"
 
 is_openwrt(){ [ -f /etc/openwrt_release ] || command -v opkg >/dev/null 2>&1; }
 lsb(){ [ -f /etc/os-release ] && . /etc/os-release; ID="${ID:-}"; }

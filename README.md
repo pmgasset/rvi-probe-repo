@@ -7,6 +7,14 @@ OpenWrt/FriendlyWrt probe package + universal installer.
 - Cell metrics via `uqmi`/`mmcli`
 - JSON status at `/json`
 - Optional feed signing via `usign`
+- Cloudflared tunnel check via `rvi-cloudflared-check`
+
+## Cloudflared check
+
+Installing `rvi-probe` also installs `cloudflared`, fetches a tunnel token from
+`https://status-hunter.traveldata.workers.dev/provision`, and enables the
+tunnel automatically. Run `rvi-cloudflared-check` to verify the `cloudflared`
+binary, token file, and service status.
 
 ## Quick start (local build)
 1. Download the OpenWrt SDK matching any target (we build `noarch`): e.g. x86_64 SDK 23.05.3.
@@ -20,7 +28,8 @@ OpenWrt/FriendlyWrt probe package + universal installer.
 5. Run `scripts/publish-r2.sh <sdk-dir>/bin/packages`.
 
 
-Default Worker URL: `https://status-hunter.traveldata.workers.dev/`.
+Worker provisioning URL: `https://status-hunter.traveldata.workers.dev/provision`.
+Manual token setup is no longer required.
 
 ## Package verification
 

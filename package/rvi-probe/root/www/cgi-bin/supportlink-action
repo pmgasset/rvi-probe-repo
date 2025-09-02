@@ -1,0 +1,47 @@
+#!/bin/sh
+# Device actions for SupportLink (JSON)
+set -efu
+
+echo "Content-Type: application/json; charset=UTF-8"
+echo "Cache-Control: no-store"
+echo
+
+# parse op from QS or POST (x-www-form-urlencoded)
+qs_get() {
+  key="$1"
+  val="$(printf '%s' "${QUERY_STRING:-}" | sed -n "s/.*[?&]$key=\([^&]*\).*/\1/p")"
+  printf '%s' "$val" | sed -e 's/+/%20/g' -e 's/%20/ /g'
+}
+post_get() {
+  key="$1"
+  body="$(cat 2>/dev/null || true)"
+  printf '%s' "$body" | sed -n "s/.*[&]*$key=\([^&]*\).*/\1/p" | sed -e 's/+/%20/g' -e 's/%20/ /g'
+}
+
+op="$(qs_get op)"; [ -z "$op" ] && op="$(post_get op)"
+
+case "$op" in
+  restart_tunnel)
+    if [ -x /etc/init.d/cloudflared ]; then
+      /etc/init.d/cloudflared restart >/dev/null 2>&1 && echo '{"result":"ok"}' || echo '{"result":"error"}'
+    else
+      echo '{"result":"missing"}'
+    fi
+    ;;
+  reboot_device)
+    (sleep 1; /sbin/reboot) >/dev/null 2>&1 &
+    echo '{"result":"ok"}'
+    ;;
+  renew_wan)
+    if ifstatus wan >/dev/null 2>&1; then
+      ifdown wan >/dev/null 2>&1; sleep 2; ifup wan >/dev/null 2>&1
+      echo '{"result":"ok"}'
+    else
+      ifdown lan >/dev/null 2>&1; sleep 2; ifup lan >/dev/null 2>&1
+      echo '{"result":"ok"}'
+    fi
+    ;;
+  *)
+    echo '{"result":"unknown"}'
+    ;;
+esac

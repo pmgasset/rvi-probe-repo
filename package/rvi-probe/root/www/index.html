@@ -12,7 +12,7 @@
 <script>
 async function loadStatus(){
   try {
-    const r = await fetch('/cgi-bin/supportlink.api', {cache:'no-store'});
+    const r = await fetch('/cgi-bin/supportlink', {cache:'no-store'});
     const j = await r.json();
     document.getElementById('status').textContent = `Tunnel: ${j.tunnel.hostname} (${j.tunnel.state})\nInternet: ${j.internet}`;
   } catch(e){

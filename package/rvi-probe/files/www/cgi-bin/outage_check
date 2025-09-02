@@ -1,23 +1,43 @@
 #!/bin/sh
+# Provider status via StatusHunter Worker, cached 5 minutes under /tmp
 set -efu
 
-# Parse provider from query string
-p="$(printf '%s' "${QUERY_STRING:-}" | sed -n 's/.*[?&]provider=\([^&]*\).*/\1/p')"
-p="$(printf '%s' "$p" | sed 's/%20/ /g')"
+echo "Content-Type: application/json; charset=UTF-8"
+echo "Cache-Control: no-store"
+echo
+
+qs_get() {
+  key="$1"
+  val="$(printf '%s' "${QUERY_STRING:-}" | sed -n "s/.*[?&]$key=\([^&]*\).*/\1/p")"
+  printf '%s' "$val" | sed -e 's/+/%20/g' -e 's/%20/ /g'
+}
+
+provider="$(qs_get provider)"
+[ -z "$provider" ] && { echo '{"status":"unknown","summary":"provider missing"}'; exit 0; }
 
 WORKER_URL="$(uci -q get rviprobe.config.worker_url || true)"
 [ -z "${WORKER_URL:-}" ] && WORKER_URL="https://status-hunter.traveldata.workers.dev"
 
-echo "Content-Type: application/json; charset=UTF-8"
-echo
+cache="/tmp/outage_$(printf '%s' "$provider" | tr ' A-Z' '_a-z').json"
+cts="/tmp/outage_$(printf '%s' "$provider" | tr ' A-Z' '_a-z').ts"
+now="$(date +%s 2>/dev/null || busybox date +%s)"
+TTL=300
 
-if [ -z "$p" ]; then
-  echo '{"status":"unknown","summary":"provider missing"}'
-  exit 0
+if [ -s "$cache" ] && [ -s "$cts" ]; then
+  ts="$(cat "$cts" 2>/dev/null || echo 0)"
+  age=$((now - ts))
+  if [ "$age" -lt "$TTL" ]; then
+    cat "$cache"
+    exit 0
+  fi
 fi
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "${WORKER_URL%/}/status?provider=$(printf '%s' "$p" | sed 's/ /%20/g')" || echo '{"status":"unknown"}'
-else
-  echo '{"status":"unknown"}'
+  if curl -fsSL "${WORKER_URL%/}/status?provider=$(printf '%s' "$provider" | sed 's/ /%20/g')" -o "$cache"; then
+    printf '%s' "$now" > "$cts"
+    cat "$cache"
+    exit 0
+  fi
 fi
+
+echo '{"status":"unknown"}'

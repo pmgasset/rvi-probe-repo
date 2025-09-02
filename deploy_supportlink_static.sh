@@ -1,3 +1,12 @@
+#!/bin/sh
+set -euo pipefail
+
+INDEX="/www/index.html"
+if [ -f "$INDEX" ] && [ ! -f "$INDEX.bak" ]; then
+  cp "$INDEX" "$INDEX.bak"
+fi
+
+cat <<'HTML' > "$INDEX"
 <!doctype html>
 <html lang="en">
 <head>
@@ -133,165 +142,6 @@
 </div>
 
 <script>
-
-/* ---------------- DOM & helpers ---------------- */
-const $ = sel => document.querySelector(sel);
-const pill = $('#statusPill'),
-      host = $('#host'),
-      did  = $('#did'),
-      inet = $('#inet'),
-      code = $('#code'),
-      ago  = $('#ago'),
-      results = $('#results'),
-      btnSpeed = $('#btnSpeed'),
-      btnReboot = $('#btnReboot'),
-      btnInetDetails = $('#btnInetDetails'),
-      inetModal = $('#inetModal'),
-      inetClose = $('#inetClose'),
-      inetBody = $('#inetBody'),
-      outageResults = $('#outageResults');
-
-const safe = v => (v === undefined || v === null || v === '') ? '—' : v;
-const toMbps = v => v ? (v/1e6).toFixed(2) : '—';
-
-async function fetchJSON(url, opts){
-  const r = await fetch(url, Object.assign({cache:'no-store'}, opts||{}));
-  const ct = (r.headers.get('content-type') || '').toLowerCase();
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  if (ct.includes('application/json')) return r.json();
-  const t = await r.text();
-  try { return JSON.parse(t); } catch { throw new Error('Bad JSON: '+t.slice(0,160)); }
-}
-
-function setPill(state){
-  pill.classList.remove('ok','warn','bad');
-  if(state==='active'){ pill.classList.add('ok'); pill.textContent='Online'; }
-  else if(state==='starting'){ pill.classList.add('warn'); pill.textContent='Starting…'; }
-  else { pill.classList.add('bad'); pill.textContent='Offline'; }
-}
-
-/* ---------------- Status refresh ---------------- */
-let lastFetch=0;
-async function getStatus(){
-  try{
-    const j = await fetchJSON('/cgi-bin/supportlink');
-    host.textContent = safe(j?.tunnel?.hostname);
-    did.textContent  = safe(j?.tunnel?.id);
-    code.textContent = safe(j?.tunnel?.code);
-    inet.textContent = safe((j?.internet||'').toUpperCase());
-    setPill(j?.tunnel?.state || 'down');
-    lastFetch = Date.now();
-  }catch{
-    setPill('down');
-  }
-}
-setInterval(()=>{ if(!lastFetch) return; const s=((Date.now()-lastFetch)/1000)|0; ago.textContent=(s<60?`${s}s`:`${(s/60)|0}m`); },1000);
-(async function loop(){ await getStatus(); setTimeout(loop, 10000); })();
-
-/* ---------------- Internet Details modal ---------------- */
-function openModal(){ inetModal.classList.add('open'); inetModal.setAttribute('aria-hidden','false'); }
-function closeModal(){ inetModal.classList.remove('open'); inetModal.setAttribute('aria-hidden','true'); }
-inetClose.onclick = closeModal;
-inetModal.addEventListener('click', (e)=>{ if(e.target===inetModal) closeModal(); });
-
-btnInetDetails.onclick = async ()=>{
-  openModal();
-  inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
-  outageResults.innerHTML = '';
-  try{
-    const j = await fetchJSON('/cgi-bin/internet-details');
-    if (j?.isp || j?.asname || j?.asn) inet.textContent = j.isp || j.asname || j.asn || '—';
-    const ts = j?.timestamp ? new Date(j.timestamp*1000).toLocaleString() : '—';
-    inetBody.innerHTML = `
-      <div class="kgrid">
-        <div><span class="k">Public IP</span><div class="v mono">${safe(j?.ip)}</div></div>
-        <div><span class="k">Carrier/ISP</span><div class="v">${safe(j?.isp || j?.org || j?.asname)}</div></div>
-        <div><span class="k">Type</span><div class="v">${safe(j?.type || 'public')}</div></div>
-        <div><span class="k">ASN</span><div class="v">${safe(j?.asn)}</div></div>
-        <div><span class="k">City/Region</span><div class="v">${safe(j?.city)}, ${safe(j?.region)}</div></div>
-        <div><span class="k">Country</span><div class="v">${safe(j?.country)}</div></div>
-        <div><span class="k">Source</span><div class="v">${safe(j?.source || 'multiple')}</div></div>
-        <div><span class="k">Updated</span><div class="v small">${ts}</div></div>
-      </div>`;
-  }catch(e){
-    inetBody.innerHTML = `<div class="small" style="color:#f87171">Unable to load Internet details.<br><span class="muted">${e.message}</span></div>`;
-  }
-};
-
-/* ---------------- Outage Signals ---------------- */
-function labelFor(key){
-  const labels = {att:"AT&T",verizon:"Verizon",tmobile:"T-Mobile",xfinity:"Xfinity",spectrum:"Spectrum",cox:"Cox",starlink:"Starlink",
-    youtube:"YouTube",netflix:"Netflix",disneyplus:"Disney+",hulu:"Hulu",
-    zoom:"Zoom",slack:"Slack",m365:"Microsoft 365",teams:"Teams",github:"GitHub",cloudflare:"Cloudflare",openai:"OpenAI"};
-  return labels[key] || key;
-}
-function statusDot(s){ return s==="normal"?"🟢":s==="elevated"?"🟡":s==="major"?"🔴":"⚪"; }
-function applyChipStatus(chip, status){
-  chip.classList.remove('ok','warn','bad','unknown');
-  if(status==="normal") chip.classList.add('ok');
-  else if(status==="elevated") chip.classList.add('warn');
-  else if(status==="major") chip.classList.add('bad');
-  else chip.classList.add('unknown');
-}
-async function checkProvider(chip, silent=false){
-  const provider = chip.dataset.provider;
-  try{
-    const j = await fetchJSON(`/cgi-bin/outage_check?provider=${encodeURIComponent(provider)}`);
-    applyChipStatus(chip, j.status);
-    if (!silent){
-      const card = document.createElement('div');
-      card.className = 'result-card';
-      card.innerHTML = `
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
-          <div><strong>${j.display_name || labelFor(provider)}</strong> ${statusDot(j.status)}</div>
-          <div class="small muted">${j.timestamp ? new Date(j.timestamp*1000).toLocaleTimeString() : ''}</div>
-        </div>
-        <div class="small" style="margin-top:4px">${j.summary || 'Status unknown.'}</div>
-        ${j.link ? `<div style="margin-top:6px"><a class="muted-link" href="${j.link}" target="_blank" rel="noopener">Check live reports</a></div>` : '' }
-      `;
-      outageResults.prepend(card);
-    }
-  }catch{ applyChipStatus(chip, "unknown"); }
-}
-document.querySelectorAll('.chip').forEach(chip=>{
-  chip.addEventListener('click', ()=>checkProvider(chip,false));
-});
-const autoProviders = ["youtube","netflix","disneyplus","hulu","zoom","slack","m365","teams","github","cloudflare","openai"];
-(async function refreshAutoChips(){
-  for(const key of autoProviders){
-    const chip = document.querySelector(`.chip[data-provider="${key}"]`);
-    if (chip) await checkProvider(chip,true);
-  }
-  setTimeout(refreshAutoChips, 5*60*1000);
-})();
-
-/* ---------------- Actions ---------------- */
-btnReboot.onclick = async ()=>{
-  const pin = prompt('Enter the 6-digit Share Code to confirm router restart:', code.textContent || '');
-  if(!pin) return;
-  results.style.display='block'; results.textContent='Restarting router…';
-  try{
-    const j = await fetchJSON('/cgi-bin/supportlink?action=restart_router&pin='+encodeURIComponent(pin));
-    results.textContent = j.ok ? 'Router is rebooting now. This page will become temporarily unavailable.' : 'Restart failed: '+(j.error||'unknown');
-  }catch{ results.textContent='Restart failed.'; }
-};
-
-btnSpeed.onclick = async ()=>{
-  results.style.display='block'; results.textContent='Running speed test… (up to ~1 minute)';
-  try{
-    const j = await fetchJSON('/cgi-bin/supportlink?action=speedtest');
-    if(!j.ok){ results.textContent = 'Speed test error: '+(j.error||'unknown')+(j.install?`\n${j.install}`:''); return; }
-    const st = j.speedtest || {};
-    const ping = st.ping?.latency ?? st.ping ?? null;
-    const down_bps = st.download?.bandwidth ? (st.download.bandwidth*8) : (st.download?.bitsPerSecond || null);
-    const up_bps   = st.upload?.bandwidth   ? (st.upload.bandwidth*8)   : (st.upload?.bitsPerSecond   || null);
-    results.textContent =
-      `Latency: ${ping!==null ? (ping.toFixed? ping.toFixed(1): ping) : '—'} ms\n`+
-      `Download: ${toMbps(down_bps)} Mbps\n`+
-      `Upload:   ${toMbps(up_bps)} Mbps`;
-  }catch{ results.textContent='Speed test failed.'; }
-};
-=======
 // Basic SupportLink dashboard logic
 const host = document.getElementById('host');
 const did = document.getElementById('did');
@@ -369,3 +219,19 @@ document.querySelectorAll('#providerChips .chip').forEach(chip => {
 </script>
 </body>
 </html>
+HTML
+
+# ensure cgi_prefix in uhttpd
+if ! uci show uhttpd 2>/dev/null | grep -q "cgi_prefix.*=/cgi-bin"; then
+  uci add_list uhttpd.main.cgi_prefix='/cgi-bin'
+  uci commit uhttpd
+fi
+
+/etc/init.d/uhttpd restart
+[ -x /etc/init.d/cloudflared ] && /etc/init.d/cloudflared restart
+
+echo "Verify with:"
+echo "  curl -I http://127.0.0.1/"
+echo "  curl http://127.0.0.1/cgi-bin/supportlink"
+echo "  curl http://127.0.0.1/cgi-bin/internet_details"
+echo "  curl http://127.0.0.1/cgi-bin/outage_check?provider=att"

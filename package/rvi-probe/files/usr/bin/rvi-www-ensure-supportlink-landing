@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+WWW="/www"
+IDX="$WWW/index.html"
+mkdir -p "$WWW"
+
+REDIR='<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url=/cgi-bin/supportlink">
+<title>Redirecting…</title>
+<link rel="canonical" href="/cgi-bin/supportlink">
+</head><body>
+<p>If you are not redirected, <a href="/cgi-bin/supportlink">click here</a>.</p>
+<script>location.replace("/cgi-bin/supportlink");</script>
+</body></html>
+'
+
+# create/update only if different or missing
+if [ ! -s "$IDX" ] || ! grep -q 'cgi-bin/supportlink' "$IDX" 2>/dev/null; then
+  printf '%s' "$REDIR" > "$IDX"
+fi
+
+echo "$IDX"

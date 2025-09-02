@@ -5,11 +5,13 @@ PROG=/usr/bin/cloudflared
 TOKEN_FILE=/etc/rvi/cloudflared.token
 GETTER=/usr/bin/rvi-cloudflared-get-token
 CONFGEN=/usr/bin/rvi-cloudflared-write-config
+LANDER=/usr/bin/rvi-www-ensure-supportlink-landing
 CONF=/etc/cloudflared/config.yml
 
 start_service() {
   [ -x "$GETTER" ] && "$GETTER" || true
   [ -x "$CONFGEN" ] && "$CONFGEN" >/dev/null 2>&1 || true
+  [ -x "$LANDER" ] && "$LANDER" >/dev/null 2>&1 || true
 
   if [ ! -s "$TOKEN_FILE" ]; then
     echo "[cloudflared] token missing at $TOKEN_FILE"

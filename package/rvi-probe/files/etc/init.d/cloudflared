@@ -4,9 +4,12 @@ USE_PROCD=1
 PROG=/usr/bin/cloudflared
 TOKEN_FILE=/etc/rvi/cloudflared.token
 GETTER=/usr/bin/rvi-cloudflared-get-token
+CONFGEN=/usr/bin/rvi-cloudflared-write-config
+CONF=/etc/cloudflared/config.yml
 
 start_service() {
   [ -x "$GETTER" ] && "$GETTER" || true
+  [ -x "$CONFGEN" ] && "$CONFGEN" >/dev/null 2>&1 || true
 
   if [ ! -s "$TOKEN_FILE" ]; then
     echo "[cloudflared] token missing at $TOKEN_FILE"
@@ -14,7 +17,9 @@ start_service() {
   fi
 
   procd_open_instance
-  procd_set_param command "$PROG" --no-autoupdate tunnel run --token "$(cat "$TOKEN_FILE")"
+  procd_set_param command "$PROG" --no-autoupdate --edge-ip-version 4 --protocol http2 \
+    --config "$CONF" \
+    tunnel run --token "$(cat "$TOKEN_FILE")"
   procd_set_param respawn 5 10 5
   procd_close_instance
 }

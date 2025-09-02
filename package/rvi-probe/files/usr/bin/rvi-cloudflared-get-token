@@ -5,7 +5,7 @@
 
 set -u
 LOG=/tmp/rvi-cloudflared-get-token.log
-# Worker root (don’t include /provision here)
+# Worker root (don't include /provision here)
 WRK_ROOT="https://rvi-provision.traveldata.workers.dev"
 WRK="$WRK_ROOT/provision"
 STATE_DIR="/etc/rvi"

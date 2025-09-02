@@ -1,45 +1,295 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<title>SupportLink</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupportLink • Device Status</title>
+<style>
+  :root {
+    --bg:#0f172a; --panel:#111827; --muted:#9ca3af; --ok:#10b981; --warn:#f59e0b; --bad:#ef4444; --accent:#60a5fa;
+    --btn:#1f2937; --btnHover:#374151;
+  }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:#e5e7eb;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:960px;margin:40px auto;padding:0 16px}
+  .card{background:var(--panel);border:1px solid #1f2937;border-radius:16px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  h1{font-size:28px;margin:0 0 8px}
+  .sub{color:var(--muted);margin:0 0 14px}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;font-weight:600}
+  .ok{background:rgba(16,185,129,.14);color:#34d399;border:1px solid rgba(16,185,129,.35)}
+  .warn{background:rgba(245,158,11,.14);color:#fbbf24;border:1px solid rgba(245,158,11,.35)}
+  .bad{background:rgba(239,68,68,.14);color:#f87171;border:1px solid rgba(239,68,68,.35)}
+  .muted{color:var(--muted)}
+  .stat{padding:14px;border:1px dashed #374151;border-radius:12px}
+  .k{display:block;color:var(--muted);font-size:12px}
+  .v{font:600 18px/1.2 system-ui}
+  .actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px}
+  button{appearance:none;border:1px solid #374151;background:var(--btn);color:#e5e7eb;border-radius:12px;padding:12px 16px;cursor:pointer;font-weight:600}
+  button:hover{background:var(--btnHover)}
+  .accent{border-color:#1e40af}
+  .danger{border-color:#7f1d1d}
+  .wide{width:100%}
+  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace}
+  .small{font-size:12px}
+  .hr{height:1px;background:#1f2937;margin:16px 0}
+  .log{background:#0b1022;border:1px solid #1f2937;border-radius:12px;padding:12px;white-space:pre-wrap;max-height:300px;overflow:auto}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+
+  /* Modal + chips */
+  .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:16px;z-index:1000;background:rgba(0,0,0,.45)}
+  .modal.open{display:flex}
+  .modal-content{background:var(--panel);border:1px solid #1f2937;border-radius:16px;max-width:900px;width:100%;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+  .modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .close{cursor:pointer;font-weight:700;border:1px solid #374151;border-radius:8px;padding:4px 10px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .chip{font-size:13px;padding:8px 10px;border-radius:999px;border:2px solid #374151;background:#0e162d;color:#d1d5db;cursor:pointer}
+  .chip[disabled]{opacity:.65;cursor:not-allowed}
+  .result-card{border:1px solid #1f2937;border-radius:12px;padding:10px;background:#0b1022}
+  .kgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+  .muted-link{color:#93c5fd;text-decoration:none}
+  .muted-link:hover{text-decoration:underline}
+
+  /* Chip status outlines */
+  .chip.ok{ border-color:#10b981; color:#10b981; }
+  .chip.warn{ border-color:#f59e0b; color:#f59e0b; }
+  .chip.bad{ border-color:#ef4444; color:#ef4444; }
+  .chip.unknown{ border-color:#6b7280; color:#9ca3af; }
+</style>
 </head>
 <body>
-<h1>SupportLink</h1>
-<div id="status">Loading status…</div>
-<pre id="details"></pre>
-<pre id="outage"></pre>
+<div class="wrap">
+  <div class="card">
+    <h1>SupportLink</h1>
+    <p class="sub">Fast help from RV Internet Help. Keep this page open if you’re on the phone with support.</p>
+
+    <div class="grid" id="stats">
+      <div class="stat"><span class="k">Hostname</span><span class="v mono" id="host">—</span></div>
+      <div class="stat"><span class="k">Device ID</span><span class="v mono" id="did">—</span></div>
+      <div class="stat"><span class="k">Share Code (tell support)</span><span class="v mono" id="code">—</span><span class="small muted">Changes every 5 minutes</span></div>
+      <div class="stat"><span class="k">Internet</span><span class="v" id="inet">—</span></div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <span id="statusPill" class="pill warn">Checking…</span>
+      <span class="muted small">Last updated <span id="ago">—</span></span>
+    </div>
+
+    <div class="hr"></div>
+
+    <div class="actions">
+      <button class="accent" id="btnSpeed">Run Speed Test</button>
+      <button id="btnInetDetails">Internet Details</button>
+      <button class="danger" id="btnReboot">Restart My Router</button>
+    </div>
+
+    <div id="results" class="log" style="display:none;margin-top:12px"></div>
+  </div>
+</div>
+
+<!-- Internet Details Modal -->
+<div class="modal" id="inetModal" aria-hidden="true">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 style="margin:0">Internet Details</h3>
+      <button class="close" id="inetClose">Close</button>
+    </div>
+
+    <div id="inetBody" class="result-card">
+      <div class="small muted">Loading network info…</div>
+    </div>
+
+    <h4 style="margin:14px 0 6px">Outage Signals</h4>
+    <div class="chips" id="providerChips">
+      <!-- Carriers/ISPs -->
+      <button class="chip" data-provider="att">AT&amp;T</button>
+      <button class="chip" data-provider="verizon">Verizon</button>
+      <button class="chip" data-provider="tmobile">T-Mobile</button>
+      <button class="chip" data-provider="xfinity">Xfinity</button>
+      <button class="chip" data-provider="spectrum">Spectrum</button>
+      <button class="chip" data-provider="cox">Cox</button>
+      <button class="chip" data-provider="starlink">Starlink</button>
+      <!-- Streaming (top 4 + YouTube) -->
+      <button class="chip" data-provider="youtube">YouTube</button>
+      <button class="chip" data-provider="netflix">Netflix</button>
+      <button class="chip" data-provider="disneyplus">Disney+</button>
+      <button class="chip" data-provider="hulu">Hulu</button>
+      <!-- Work apps -->
+      <button class="chip" data-provider="zoom">Zoom</button>
+      <button class="chip" data-provider="slack">Slack</button>
+      <button class="chip" data-provider="m365">Microsoft&nbsp;365</button>
+      <button class="chip" data-provider="teams">Teams</button>
+      <button class="chip" data-provider="github">GitHub</button>
+      <button class="chip" data-provider="cloudflare">Cloudflare</button>
+      <button class="chip" data-provider="openai">OpenAI</button>
+    </div>
+
+    <div id="outageResults" style="display:grid;gap:8px;margin-top:10px"></div>
+
+    <details style="margin-top:12px">
+      <summary>Privacy</summary>
+      <small class="muted">We fetch only public IP/ASN and public status pages. No browsing content is inspected. DNS-based app detection remains off unless you opt in.</small>
+    </details>
+  </div>
+</div>
+
 <script>
-async function loadStatus(){
-  try {
-    const r = await fetch('/cgi-bin/supportlink', {cache:'no-store'});
-    const j = await r.json();
-    document.getElementById('status').textContent = `Tunnel: ${j.tunnel.hostname} (${j.tunnel.state})\nInternet: ${j.internet}`;
-  } catch(e){
-    document.getElementById('status').textContent = 'Failed to load status';
+/* ---------------- DOM & helpers ---------------- */
+const $ = sel => document.querySelector(sel);
+const pill = $('#statusPill'),
+      host = $('#host'),
+      did  = $('#did'),
+      inet = $('#inet'),
+      code = $('#code'),
+      ago  = $('#ago'),
+      results = $('#results'),
+      btnSpeed = $('#btnSpeed'),
+      btnReboot = $('#btnReboot'),
+      btnInetDetails = $('#btnInetDetails'),
+      inetModal = $('#inetModal'),
+      inetClose = $('#inetClose'),
+      inetBody = $('#inetBody'),
+      outageResults = $('#outageResults');
+
+const safe = v => (v === undefined || v === null || v === '') ? '—' : v;
+const toMbps = v => v ? (v/1e6).toFixed(2) : '—';
+
+async function fetchJSON(url, opts){
+  const r = await fetch(url, Object.assign({cache:'no-store'}, opts||{}));
+  const ct = (r.headers.get('content-type') || '').toLowerCase();
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (ct.includes('application/json')) return r.json();
+  const t = await r.text();
+  try { return JSON.parse(t); } catch { throw new Error('Bad JSON: '+t.slice(0,160)); }
+}
+
+function setPill(state){
+  pill.classList.remove('ok','warn','bad');
+  if(state==='active'){ pill.classList.add('ok'); pill.textContent='Online'; }
+  else if(state==='starting'){ pill.classList.add('warn'); pill.textContent='Starting…'; }
+  else { pill.classList.add('bad'); pill.textContent='Offline'; }
+}
+
+/* ---------------- Status refresh ---------------- */
+let lastFetch=0;
+async function getStatus(){
+  try{
+    const j = await fetchJSON('/cgi-bin/supportlink');
+    host.textContent = safe(j?.tunnel?.hostname);
+    did.textContent  = safe(j?.tunnel?.id);
+    code.textContent = safe(j?.tunnel?.code);
+    inet.textContent = safe((j?.internet||'').toUpperCase());
+    setPill(j?.tunnel?.state || 'down');
+    lastFetch = Date.now();
+  }catch{
+    setPill('down');
   }
 }
-async function loadDetails(){
-  try {
-    const r = await fetch('/cgi-bin/internet_details', {cache:'no-store'});
-    const j = await r.json();
-    document.getElementById('details').textContent = JSON.stringify(j, null, 2);
-  } catch(e){
-    document.getElementById('details').textContent = 'Failed to load details';
+setInterval(()=>{ if(!lastFetch) return; const s=((Date.now()-lastFetch)/1000)|0; ago.textContent=(s<60?`${s}s`:`${(s/60)|0}m`); },1000);
+(async function loop(){ await getStatus(); setTimeout(loop, 10000); })();
+
+/* ---------------- Internet Details modal ---------------- */
+function openModal(){ inetModal.classList.add('open'); inetModal.setAttribute('aria-hidden','false'); }
+function closeModal(){ inetModal.classList.remove('open'); inetModal.setAttribute('aria-hidden','true'); }
+inetClose.onclick = closeModal;
+inetModal.addEventListener('click', (e)=>{ if(e.target===inetModal) closeModal(); });
+
+btnInetDetails.onclick = async ()=>{
+  openModal();
+  inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
+  outageResults.innerHTML = '';
+  try{
+    const j = await fetchJSON('/cgi-bin/internet_details');
+    if (j?.isp || j?.asname || j?.asn) inet.textContent = j.isp || j.asname || j.asn || '—';
+    const ts = j?.timestamp ? new Date(j.timestamp*1000).toLocaleString() : '—';
+    inetBody.innerHTML = `
+      <div class="kgrid">
+        <div><span class="k">Public IP</span><div class="v mono">${safe(j?.ip)}</div></div>
+        <div><span class="k">Carrier/ISP</span><div class="v">${safe(j?.isp || j?.org || j?.asname)}</div></div>
+        <div><span class="k">Type</span><div class="v">${safe(j?.type || 'public')}</div></div>
+        <div><span class="k">ASN</span><div class="v">${safe(j?.asn)}</div></div>
+        <div><span class="k">City/Region</span><div class="v">${safe(j?.city)}, ${safe(j?.region)}</div></div>
+        <div><span class="k">Country</span><div class="v">${safe(j?.country)}</div></div>
+        <div><span class="k">Source</span><div class="v">${safe(j?.source || 'multiple')}</div></div>
+        <div><span class="k">Updated</span><div class="v small">${ts}</div></div>
+      </div>`;
+  }catch(e){
+    inetBody.innerHTML = `<div class="small" style="color:#f87171">Unable to load Internet details.<br><span class="muted">${e.message}</span></div>`;
   }
+};
+
+/* ---------------- Outage Signals ---------------- */
+function labelFor(key){
+  const labels = {att:"AT&T",verizon:"Verizon",tmobile:"T-Mobile",xfinity:"Xfinity",spectrum:"Spectrum",cox:"Cox",starlink:"Starlink",
+    youtube:"YouTube",netflix:"Netflix",disneyplus:"Disney+",hulu:"Hulu",
+    zoom:"Zoom",slack:"Slack",m365:"Microsoft 365",teams:"Teams",github:"GitHub",cloudflare:"Cloudflare",openai:"OpenAI"};
+  return labels[key] || key;
 }
-async function outage(provider){
-  try {
-    const r = await fetch(`/cgi-bin/outage_check?provider=${encodeURIComponent(provider)}`, {cache:'no-store'});
-    const j = await r.json();
-    document.getElementById('outage').textContent = JSON.stringify(j, null, 2);
-  } catch(e){
-    document.getElementById('outage').textContent = 'Failed to load outage info';
+function statusDot(s){ return s==="normal"?"🟢":s==="elevated"?"🟡":s==="major"?"🔴":"⚪"; }
+function applyChipStatus(chip, status){
+  chip.classList.remove('ok','warn','bad','unknown');
+  if(status==="normal") chip.classList.add('ok');
+  else if(status==="elevated") chip.classList.add('warn');
+  else if(status==="major") chip.classList.add('bad');
+  else chip.classList.add('unknown');
+}
+async function checkProvider(chip, silent=false){
+  const provider = chip.dataset.provider;
+  try{
+    const j = await fetchJSON(`/cgi-bin/outage_check?provider=${encodeURIComponent(provider)}`);
+    applyChipStatus(chip, j.status);
+    if (!silent){
+      const card = document.createElement('div');
+      card.className = 'result-card';
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+          <div><strong>${j.display_name || labelFor(provider)}</strong> ${statusDot(j.status)}</div>
+          <div class="small muted">${j.timestamp ? new Date(j.timestamp*1000).toLocaleTimeString() : ''}</div>
+        </div>
+        <div class="small" style="margin-top:4px">${j.summary || 'Status unknown.'}</div>
+        ${j.link ? `<div style="margin-top:6px"><a class="muted-link" href="${j.link}" target="_blank" rel="noopener">Check live reports</a></div>` : '' }
+      `;
+      outageResults.prepend(card);
+    }
+  }catch{ applyChipStatus(chip, "unknown"); }
+}
+document.querySelectorAll('.chip').forEach(chip=>{
+  chip.addEventListener('click', ()=>checkProvider(chip,false));
+});
+const autoProviders = ["youtube","netflix","disneyplus","hulu","zoom","slack","m365","teams","github","cloudflare","openai"];
+(async function refreshAutoChips(){
+  for(const key of autoProviders){
+    const chip = document.querySelector(`.chip[data-provider="${key}"]`);
+    if (chip) await checkProvider(chip,true);
   }
-}
-loadStatus();
-loadDetails();
-outage('default');
+  setTimeout(refreshAutoChips, 5*60*1000);
+})();
+
+/* ---------------- Actions ---------------- */
+btnReboot.onclick = async ()=>{
+  const pin = prompt('Enter the 6-digit Share Code to confirm router restart:', code.textContent || '');
+  if(!pin) return;
+  results.style.display='block'; results.textContent='Restarting router…';
+  try{
+    const j = await fetchJSON('/cgi-bin/supportlink?action=restart_router&pin='+encodeURIComponent(pin));
+    results.textContent = j.ok ? 'Router is rebooting now. This page will become temporarily unavailable.' : 'Restart failed: '+(j.error||'unknown');
+  }catch{ results.textContent='Restart failed.'; }
+};
+
+btnSpeed.onclick = async ()=>{
+  results.style.display='block'; results.textContent='Running speed test… (up to ~1 minute)';
+  try{
+    const j = await fetchJSON('/cgi-bin/supportlink?action=speedtest');
+    if(!j.ok){ results.textContent = 'Speed test error: '+(j.error||'unknown')+(j.install?`\n${j.install}`:''); return; }
+    const st = j.speedtest || {};
+    const ping = st.ping?.latency ?? st.ping ?? null;
+    const down_bps = st.download?.bandwidth ? (st.download.bandwidth*8) : (st.download?.bitsPerSecond || null);
+    const up_bps   = st.upload?.bandwidth   ? (st.upload.bandwidth*8)   : (st.upload?.bitsPerSecond   || null);
+    results.textContent =
+      `Latency: ${ping!==null ? (ping.toFixed? ping.toFixed(1): ping) : '—'} ms\n`+
+      `Download: ${toMbps(down_bps)} Mbps\n`+
+      `Upload:   ${toMbps(up_bps)} Mbps`;
+  }catch{ results.textContent='Speed test failed.'; }
+};
 </script>
 </body>
 </html>

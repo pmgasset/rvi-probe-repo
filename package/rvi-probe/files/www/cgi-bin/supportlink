@@ -1,11 +1,10 @@
 #!/bin/sh
 # SupportLink: status JSON + speedtest
-# - Uses R2-hosted librespeed-cli (auto-install on first use)
-# - Optional manifest-based SHA256 verification
-# - Cloudflare-only server: https://speed.cloudflare.com
-# - Ookla CLI used only if already present
-# - Robust query parsing (first param OK)
-# - Emits exactly one JSON response
+# - Auto-installs librespeed-cli from R2: https://r2.rvinternethelp.com/librespeed/<REL>/<ARCH>/
+# - Validates SHA256 with SHA256SUMS if available
+# - Runs against Cloudflare: https://speed.cloudflare.com
+# - Ookla CLI is used only if already installed
+# - Robust query parsing; emits exactly one JSON result
 
 set -efu
 
@@ -14,15 +13,8 @@ header() { printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# URL decode (+ -> space, %XX)
 urldecode(){ local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
-
-# robust: handles first param and later ones
-qs_get(){
-  local key="$1" qs="&${QUERY_STRING:-}&" raw
-  raw="$(printf '%s' "$qs" | sed -n "s/.*[&]$key=\([^&]*\).*/\1/p" | head -n1)"
-  [ -n "$raw" ] && urldecode "$raw" || printf ''
-}
+qs_get(){ local key="$1" qs="&${QUERY_STRING:-}&" raw; raw="$(printf '%s' "$qs" | sed -n "s/.*[&]$key=\([^&]*\).*/\1/p" | head -n1)"; [ -n "$raw" ] && urldecode "$raw" || printf ''; }
 
 sha1hex() {
   if have sha1sum; then printf '%s' "$1" | sha1sum | awk '{print $1}'
@@ -38,131 +30,76 @@ sha1hex() {
   fi
 }
 
-emit_error(){ # usage: emit_error "msg" [install_hint] [debug]
-  header
-  printf '{'
-  printf '"ok":false,"error":"%s"' "$(json_escape "$1")"
-  [ -n "${2:-}" ] && printf ',"install":"%s"' "$(json_escape "$2")"
-  [ -n "${3:-}" ] && printf ',"debug":"%s"'   "$(json_escape "$3")"
-  printf '}\n'
-}
+emit_error(){ header; printf '{"ok":false,"error":"%s"%s%s}\n' "$(json_escape "$1")" "${2:+,\"install\":\"$(json_escape "$2")\"}" "${3:+,\"debug\":\"$(json_escape "$3")\"}"; }
 
-# ---------- device identity / status ----------
-mac_addr=''
-for IF in br-lan eth0 lan wan wlan0; do
-  [ -e "/sys/class/net/$IF/address" ] && mac_addr="$(cat "/sys/class/net/$IF/address" 2>/dev/null || true)"
-  [ -n "${mac_addr:-}" ] && break || true
-done
+# ---------- identity / status ----------
+mac_addr=''; for IF in br-lan eth0 lan wan wlan0; do [ -e "/sys/class/net/$IF/address" ] && mac_addr="$(cat "/sys/class/net/$IF/address" 2>/dev/null || true)"; [ -n "${mac_addr:-}" ] && break || true; done
 [ -z "${mac_addr:-}" ] && mac_addr="$(ip link 2>/dev/null | awk '/link\/ether/{print $2; exit}')"
 did="$(printf '%s' "${mac_addr:-unknown}" | tr -d ':' | tr 'A-Z' 'a-z')"
 hostname="${did}.nomadconnect.app"
-
 uptime="$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)"
 tstate="down"; pgrep -f cloudflared >/dev/null 2>&1 && tstate="active"
-
-bucket="$(date +%s | awk '{print int($1/300)}')"
-seed="${hostname}:${bucket}:supportlink"
-hex="$(sha1hex "$seed" | cut -c1-8)"
-code="$(printf '%d\n' "0x${hex:-0}" | awk '{printf "%06d", ($1 % 1000000)}')"
+bucket="$(date +%s | awk '{print int($1/300)}')"; seed="${hostname}:${bucket}:supportlink"; hex="$(sha1hex "$seed" | cut -c1-8)"; code="$(printf '%d\n' "0x${hex:-0}" | awk '{printf "%06d", ($1 % 1000000)}')"
 
 inet="unknown"
-if have curl; then
-  WORKER_URL="$(uci -q get rviprobe.config.worker_url || true)"; [ -z "${WORKER_URL:-}" ] && WORKER_URL="https://status-hunter.traveldata.workers.dev"
-  curl -fsSL "${WORKER_URL%/}/ping" >/dev/null 2>&1 && inet="cell" || true
-fi
+if have curl; then WORKER_URL="$(uci -q get rviprobe.config.worker_url || true)"; [ -z "${WORKER_URL:-}" ] && WORKER_URL="https://status-hunter.traveldata.workers.dev"; curl -fsSL "${WORKER_URL%/}/ping" >/dev/null 2>&1 && inet="cell" || true; fi
 [ "$inet" = "unknown" ] && ping -c1 -W1 1.1.1.1 >/dev/null 2>&1 && inet="cell" || inet="$inet"
 
-# ---------- R2 configuration ----------
-# Preferred: manifest JSON mapping arch -> {url, sha256}
-LS_MANIFEST="$(uci -q get rviprobe.config.ls_manifest || true)"   # e.g. https://r2.yourdomain.com/librespeed/manifest.json
-# Fallback: template base (we will append /librespeed-cli-<arch> ), optional sha256 per-arch
-LS_BASE="$(uci -q get rviprobe.config.ls_base || true)"           # e.g. https://r2.yourdomain.com/librespeed
-# Optional: explicit per-arch checksum keys (e.g., ls_sha256_arm64, ls_sha256_amd64, ...)
-# uci set rviprobe.config.ls_sha256_arm64='abc123...'
+# ---------- R2 layout ----------
+# default base; can be overridden by UCI (optional)
+R2_BASE="$(uci -q get rviprobe.config.r2_base || true)"; [ -z "${R2_BASE:-}" ] && R2_BASE="https://r2.rvinternethelp.com/librespeed"
 
-# ---------- arch detection / manifest helpers ----------
-detect_arch(){
+# Detect OpenWrt release (e.g. 23.05.3 -> 23.05) and arch (e.g. aarch64_cortex-a53)
+owrt_rel="$(sed -n "s/.*DISTRIB_RELEASE='\([^']*\)'.*/\1/p" /etc/openwrt_release 2>/dev/null | head -n1)"
+REL_SHORT="$(printf '%s' "$owrt_rel" | awk -F. '{print $1"."$2}')"
+ARCH="$(sed -n "s/.*DISTRIB_ARCH='\([^']*\)'.*/\1/p" /etc/openwrt_release 2>/dev/null | head -n1)"
+if [ -z "$ARCH" ]; then
   case "$(uname -m)" in
-    x86_64|amd64)  echo amd64 ;;
-    aarch64|arm64) echo arm64 ;;
-    armv7l|armv7)  echo armv7 ;;
-    armv6l|armv6)  echo armv6 ;;
-    i686|i386)     echo 386 ;;
-    mipsel|mipsle) echo mipsle ;;
-    mips)          echo mips ;;
-    *)             echo unknown ;;
+    aarch64|arm64) ARCH="aarch64_cortex-a53" ;;
+    x86_64|amd64)  ARCH="x86_64" ;;
+    *)             ARCH="unknown" ;;
   esac
-}
+fi
+[ -z "$REL_SHORT" ] && REL_SHORT="23.05"  # sensible default
 
-fetch(){
-  # usage: fetch URL OUTFILE
+R2_DIR="${R2_BASE%/}/${REL_SHORT}/${ARCH}"
+R2_BIN="${R2_DIR}/librespeed-cli"
+R2_SUM="${R2_DIR}/SHA256SUMS"
+
+# ---------- fetch & verify ----------
+fetch(){ # usage: fetch URL OUT
   local url="$1" out="$2"
   if have curl; then curl -fsSL "$url" -o "$out"
   elif have wget; then wget -q -O "$out" "$url"
   else return 1; fi
 }
 
-sha256_of(){
-  if have sha256sum; then sha256sum "$1" | awk '{print $1}'
-  elif have openssl; then openssl dgst -sha256 "$1" | awk '{print $2}'
-  else echo ""; fi
-}
-
-json_field(){ # tiny extractor for one-level JSON: json_field key < file
-  sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$2" | head -n1
-}
-
-manifest_get(){
-  # set globals: M_URL M_SHA if found; return 0/1
-  local arch="$1" tmp="/tmp/ls_manifest.$$"
-  M_URL=""; M_SHA=""
-  [ -z "$LS_MANIFEST" ] && return 1
-  fetch "$LS_MANIFEST" "$tmp" || { rm -f "$tmp"; return 1; }
-  # Try object of objects: { "arm64": {"url":"...","sha256":"..."} }
-  M_URL="$(sed -n "/\"$arch\"[[:space:]]*:/,/{/\"url\"/p}" "$tmp" | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n1)"
-  M_SHA="$(sed -n "/\"$arch\"[[:space:]]*:/,/{/\"sha256\"/p}" "$tmp" | sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n1)"
-  if [ -z "$M_URL" ]; then
-    # Try flat map: { "arm64":"url", "sha256_arm64":"abc..." }
-    M_URL="$(json_field "$arch" "$tmp")"
-    M_SHA="$(json_field "sha256_$arch" "$tmp")"
-  fi
-  rm -f "$tmp"
-  [ -n "$M_URL" ] && return 0 || return 1
-}
+sha256_of(){ if have sha256sum; then sha256sum "$1" | awk '{print $1}'; elif have openssl; then openssl dgst -sha256 "$1" | awk '{print $2}'; else echo ""; fi; }
 
 install_librespeed_from_r2(){
-  # already present?
   command -v librespeed-cli >/dev/null 2>&1 && { LS_DBG="already_installed"; return 0; }
+  local tmp="/tmp/librespeed-cli.$$" sums="/tmp/SHA256SUMS.$$" exp="" got=""
+  LS_DBG="rel=${REL_SHORT}; arch=${ARCH}; dir=${R2_DIR}"
 
-  local arch url sha exp_sha tmp="/tmp/librespeed.$$"
-  arch="$(detect_arch)"
-  [ "$arch" = "unknown" ] && { LS_DBG="unknown_arch"; return 1; }
+  # fetch binary
+  if ! fetch "$R2_BIN" "$tmp"; then LS_DBG="$LS_DBG; fetch_bin_failed"; return 1; fi
+  chmod +x "$tmp" 2>/dev/null || true
 
-  if manifest_get "$arch"; then
-    url="$M_URL"; exp_sha="$M_SHA"; LS_DBG="manifest:$LS_MANIFEST arch=$arch"
-  elif [ -n "$LS_BASE" ]; then
-    url="${LS_BASE%/}/librespeed-cli-${arch}"
-    exp_sha="$(uci -q get rviprobe.config.ls_sha256_${arch} || true)"
-    LS_DBG="template:$LS_BASE arch=$arch"
-  else
-    LS_DBG="no_manifest_or_base"; return 1
-  fi
-
-  # download
-  if ! fetch "$url" "$tmp"; then LS_DBG="$LS_DBG; fetch_failed"; return 1; fi
-
-  # checksum if provided
-  if [ -n "$exp_sha" ]; then
-    got_sha="$(sha256_of "$tmp")"
-    if [ -z "$got_sha" ] || [ "$got_sha" != "$exp_sha" ]; then
-      LS_DBG="$LS_DBG; sha_mismatch got=${got_sha:-none}"
-      rm -f "$tmp"
-      return 1
+  # optional checksum verify
+  if fetch "$R2_SUM" "$sums"; then
+    exp="$(grep -E '[[:space:]]librespeed-cli$' "$sums" | awk '{print $1}' | head -n1 || true)"
+    if [ -n "$exp" ]; then
+      got="$(sha256_of "$tmp")"
+      if [ -z "$got" ] || [ "$got" != "$exp" ]; then
+        LS_DBG="$LS_DBG; sha_mismatch got=${got:-none} exp=$exp"
+        rm -f "$tmp" "$sums"
+        return 1
+      fi
     fi
   fi
+  rm -f "$sums"
 
-  # install
-  chmod +x "$tmp" 2>/dev/null || true
+  # install to /usr/bin
   mv "$tmp" /usr/bin/librespeed-cli 2>/dev/null || cp "$tmp" /usr/bin/librespeed-cli
   chmod +x /usr/bin/librespeed-cli
   LS_DBG="$LS_DBG; installed=/usr/bin/librespeed-cli"
@@ -179,7 +116,7 @@ run_cmd_json(){ # usage: run_cmd_json "cmd"
   DBG="$(cat "$ERR" 2>/dev/null || true)"; rm -f "$OUT" "$ERR"; printf '%s' "$DBG"; return 1
 }
 
-normalize_ls_json(){ # → {"ping":ms,"download":{"bandwidth":bps},"upload":{"bandwidth":bps}}
+normalize_ls_json(){ # -> {"ping":ms,"download":{"bandwidth":bps},"upload":{"bandwidth":bps}}
   local ST="$1" ping dmb umb dB dT uB uT down_bps up_bps
   ping="$(printf '%s' "$ST" | sed -n 's/.*"ping"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -n1)"
   dmb="$(printf '%s' "$ST" | sed -n 's/.*"download"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -n1)"
@@ -188,10 +125,13 @@ normalize_ls_json(){ # → {"ping":ms,"download":{"bandwidth":bps},"upload":{"ba
   dT="$(printf '%s' "$ST" | sed -n 's/.*"downloadElapsed"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
   uB="$(printf '%s' "$ST" | sed -n 's/.*"uploadBytes"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
   uT="$(printf '%s' "$ST" | sed -n 's/.*"uploadElapsed"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+
   if [ -n "$dmb" ]; then down_bps="$(awk -v M="$dmb" 'BEGIN{printf "%.0f", M*1000000}')"
   elif [ -n "$dB" ] && [ -n "$dT" ] && [ "$dT" -gt 0 ]; then down_bps="$(awk -v B="$dB" -v MS="$dT" 'BEGIN{printf "%.0f", (B*8)/(MS/1000.0)}')"; else down_bps=0; fi
+
   if [ -n "$umb" ]; then up_bps="$(awk -v M="$umb" 'BEGIN{printf "%.0f", M*1000000}')"
   elif [ -n "$uB" ] && [ -n "$uT" ] && [ "$uT" -gt 0 ]; then up_bps="$(awk -v B="$uB" -v MS="$uT" 'BEGIN{printf "%.0f", (B*8)/(MS/1000.0)}')"; else up_bps=0; fi
+
   [ -z "$ping" ] && ping=0
   printf '{"ping":%s,"download":{"bandwidth":%s},"upload":{"bandwidth":%s}}' "$ping" "$down_bps" "$up_bps"
 }
@@ -225,36 +165,31 @@ action="$(qs_get action)"
 if [ -n "$action" ]; then
   case "$action" in
     speedtest)
-      # try; if missing, auto-install from R2 and retry once
+      # 1) try to run if already present
       if run_librespeed_cloudflare; then
-        header
-        printf '{"ok":true,"engine":"%s","server":"%s","speedtest":%s,"raw":%s' "$ENGINE" "$CF_URL" "$NORM" "$(printf '%s' "$JSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
+        header; printf '{"ok":true,"engine":"%s","server":"%s","speedtest":%s,"raw":%s' "$ENGINE" "$CF_URL" "$NORM" "$(printf '%s' "$JSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
         [ -n "$(qs_get debug)" ] && printf ',"debug":"tried=%s"' "$(json_escape "$TRIED")"
-        printf '}\n'
-        exit 0
+        printf '}\n'; exit 0
       fi
+      # 2) not installed → fetch from R2 then retry once
       if install_librespeed_from_r2 && run_librespeed_cloudflare; then
-        header
-        printf '{"ok":true,"engine":"%s","server":"%s","speedtest":%s,"raw":%s' "$ENGINE" "$CF_URL" "$NORM" "$(printf '%s' "$JSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
-        [ -n "$(qs_get debug)" ] && printf ',"debug":"installed_from_r2; %s"' "$(json_escape "${LS_DBG}; tried=${TRIED}")"
-        printf '}\n'
-        exit 0
+        header; printf '{"ok":true,"engine":"%s","server":"%s","speedtest":%s,"raw":%s' "$ENGINE" "$CF_URL" "$NORM" "$(printf '%s' "$JSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
+        [ -n "$(qs_get debug)" ] && printf ',"debug":"installed_from_r2; %s; tried=%s"' "$(json_escape "$LS_DBG")" "$(json_escape "$TRIED")"
+        printf '}\n'; exit 0
       fi
-      # final fallback if the device already has Ookla
+      # 3) last resort: Ookla if present
       if run_ookla_if_present; then exit 0; fi
-      emit_error "no speedtest client available" "set UCI rviprobe.config.ls_manifest or ls_base to your R2; then retry" "${LS_DBG:-not_installed}"
+      emit_error "no speedtest client available" "ensure ${R2_DIR} contains librespeed-cli and SHA256SUMS" "${LS_DBG:-not_installed}"
       exit 0
       ;;
     restart_router)
-      header
-      pin="$(qs_get pin)"
+      header; pin="$(qs_get pin)"
       if [ -n "$pin" ] && [ "$pin" != "$code" ]; then printf '{"ok":false,"error":"bad pin"}\n'
       else (sleep 1; /sbin/reboot) >/dev/null 2>&1 & printf '{"ok":true}\n'
       fi
       exit 0
       ;;
-    *)
-      emit_error "unknown action"; exit 0 ;;
+    *) emit_error "unknown action"; exit 0 ;;
   esac
 fi
 

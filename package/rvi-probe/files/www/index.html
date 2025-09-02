@@ -216,7 +216,7 @@ btnInetDetails.onclick = async ()=>{
   inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
   outageResults.innerHTML = '';
   try{
-    const r = await fetch('/cgi-bin/internet_details', {cache:'no-store'});
+    const r = await fetch('/cgi-bin/internet-details', {cache:'no-store'});
     const txt = await r.text();
     let j; try{ j = JSON.parse(txt); }catch{ throw new Error('Bad JSON from CGI: '+txt.slice(0,120)); }
     if (j.status === 'error') throw new Error(j.message || 'lookup failed');

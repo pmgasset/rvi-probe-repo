@@ -193,7 +193,7 @@ document.getElementById('btnReboot').onclick = async () => {
 document.getElementById('btnInetDetails').onclick = async () => {
   inetModal.classList.add('open');
   inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
-  const r = await fetch('/cgi-bin/internet_details');
+  const r = await fetch('/cgi-bin/internet-details');
   const d = await r.json();
   inetBody.innerHTML = '<pre class="mono small">' + JSON.stringify(d, null, 2) + '</pre>';
 };
@@ -233,5 +233,5 @@ fi
 echo "Verify with:"
 echo "  curl -I http://127.0.0.1/"
 echo "  curl http://127.0.0.1/cgi-bin/supportlink"
-echo "  curl http://127.0.0.1/cgi-bin/internet_details"
+echo "  curl http://127.0.0.1/cgi-bin/internet-details"
 echo "  curl http://127.0.0.1/cgi-bin/outage_check?provider=att"

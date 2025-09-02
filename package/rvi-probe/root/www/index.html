@@ -184,7 +184,7 @@ document.getElementById('btnReboot').onclick = async () => {
 document.getElementById('btnInetDetails').onclick = async () => {
   inetModal.classList.add('open');
   inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
-  const r = await fetch('/cgi-bin/internet_details');
+  const r = await fetch('/cgi-bin/internet-details');
   const d = await r.json();
   inetBody.innerHTML = '<pre class="mono small">' + JSON.stringify(d, null, 2) + '</pre>';
 };

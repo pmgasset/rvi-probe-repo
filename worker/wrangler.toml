@@ -1,21 +1,10 @@
-[vars]
-# Runtime vars are set in the Cloudflare dashboard (recommended)
-# - ACCOUNT_ID, ZONE_ID, ZONE_NAME (plaintext)
-# - API_TOKEN (secret; scopes: Account Tunnel:Edit, Zone DNS:Edit)
-
 name = "rvi-provision"
-main = "src/provision.js"
-compatibility_date = "2024-08-01"
+main = "src/worker.ts"
+compatibility_date = "2025-09-01"
 
-# Use one of the following approaches for KV binding:
-# 1) Dashboard-managed (default): keep this block commented and bind
-#    TUNNELS_KV in the Worker UI under Settings → Bindings.
-# 2) Wrangler-managed: uncomment and fill real IDs so deployments always
-#    include the binding.
-
-account_id = "e1ac21482b2f9684fcca4800ae153098"
-[[kv_namespaces]]
-binding = "TUNNELS_KV"
-id = "3404e5f2085a4e61b3dcf90a8017d7a8"
-# preview_id = "REPLACE_WITH_YOUR_PREVIEW_KV_NAMESPACE_ID"
-
+[vars]
+# Runtime vars should be set via Cloudflare dashboard or wrangler secrets
+# CF_API_TOKEN   - secret; scopes: Account Tunnel:Edit, Zone DNS:Edit
+# CF_ACCOUNT_ID  - your Cloudflare account ID
+# CF_ZONE_ID     - zone for nomadconnect.app
+# BASE_HOST      - optional override for base domain (default nomadconnect.app)

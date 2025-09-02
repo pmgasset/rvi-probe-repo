@@ -1,0 +1,73 @@
+#!/bin/sh
+# rvi-cloudflared-get-token: fetch Cloudflare tunnel token from Worker
+# Writes /etc/rvi/cloudflared.token (and optionally .tunnel_id, device_host)
+# Logs to /tmp/rvi-cloudflared-get-token.log. Exits 0 even on failure.
+
+set -u
+LOG=/tmp/rvi-cloudflared-get-token.log
+# Worker root (don't include /provision here)
+WRK_ROOT="https://rvi-provision.traveldata.workers.dev"
+WRK="$WRK_ROOT/provision"
+STATE_DIR="/etc/rvi"
+TOKEN_FILE="$STATE_DIR/cloudflared.token"
+TUNNEL_FILE="$STATE_DIR/cloudflared.tunnel_id"
+HOST_FILE="$STATE_DIR/device_host"
+
+log(){ printf '%s %s\n' "$(date +'%F %T')" "$*" >>"$LOG"; }
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# Find a stable device MAC; return 12 hex (no colons), lowercase
+pick_mac() {
+  # prefer ethernet/wwan over bridges
+  for IF in eth0 eth1 wan wwan0 wwan1 usb0 usb1; do
+    [ -f "/sys/class/net/$IF/address" ] || continue
+    MAC=$(cat "/sys/class/net/$IF/address" 2>/dev/null | tr -d ':\n' | tr 'A-Z' 'a-z')
+    echo "$MAC" | grep -qE '^[0-9a-f]{12}$' && { echo "$MAC"; return 0; }
+  done
+  # fallback: first non-lo interface that has a valid MAC
+  for IF in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+    [ -f "/sys/class/net/$IF/address" ] || continue
+    MAC=$(cat "/sys/class/net/$IF/address" 2>/dev/null | tr -d ':\n' | tr 'A-Z' 'a-z')
+    echo "$MAC" | grep -qE '^[0-9a-f]{12}$' && { echo "$MAC"; return 0; }
+  done
+  return 1
+}
+
+MAC="$(pick_mac || true)"
+if [ -z "${MAC:-}" ]; then
+  log "no valid MAC found; aborting fetch"
+  exit 0
+fi
+
+BODY="{\"mac\":\"$MAC\"}"
+log "POST $WRK payload=$BODY"
+
+RESP=""
+# retry 3 times with small backoff; curl: -f (http errors fail), -sS, -m 8s
+for S in 1 2 4; do
+  RESP="$(curl -fsS -m 8 -H 'Content-Type: application/json' -d "$BODY" "$WRK" 2>>"$LOG" || echo "")"
+  [ -n "$RESP" ] && break
+  log "empty response; retry in ${S}s"
+  sleep "$S"
+done
+
+[ -n "$RESP" ] || { log "no response from Worker"; exit 0; }
+log "resp=$RESP"
+
+# parse JSON using busybox tools
+TOKEN="$(printf '%s' "$RESP" | grep -o '"token":"[^"]*"'      | head -n1 | cut -d'"' -f4)"
+TUNID="$(printf '%s' "$RESP" | grep -o '"tunnel_id":"[^"]*"'  | head -n1 | cut -d'"' -f4)"
+HOSTN="$(printf '%s' "$RESP" | grep -o '"hostname":"[^"]*"'   | head -n1 | cut -d'"' -f4)"
+
+if [ -n "${TOKEN:-}" ]; then
+  umask 077
+  printf '%s\n' "$TOKEN" > "$TOKEN_FILE"
+  [ -n "${TUNID:-}" ] && printf '%s\n' "$TUNID" > "$TUNNEL_FILE" || true
+  [ -n "${HOSTN:-}" ] && printf '%s\n' "$HOSTN" > "$HOST_FILE"   || true
+  log "wrote token to $TOKEN_FILE; host=$HOSTN tunnel=$TUNID"
+else
+  log "no 'token' field found in response"
+fi
+
+exit 0

@@ -1,20 +1,28 @@
 #!/bin/sh /etc/rc.common
-# Simple token-based cloudflared runner for OpenWrt
-START=99
+START=90
 USE_PROCD=1
-
-BIN="/usr/bin/cloudflared"
-TOKEN_FILE="/etc/cloudflared/token"
+PROG=/usr/bin/cloudflared
+TOKEN_FILE=/etc/rvi/cloudflared.token
+GETTER=/usr/bin/rvi-cloudflared-get-token
+CONFGEN=/usr/bin/rvi-cloudflared-write-config
+LANDER=/usr/bin/rvi-www-ensure-supportlink-landing
+CONF=/etc/cloudflared/config.yml
 
 start_service() {
-    [ -x "$BIN" ] || return 0
-    [ -s "$TOKEN_FILE" ] || return 0
-    procd_open_instance
-    procd_set_param command "$BIN" --no-autoupdate tunnel run --token "$(cat "$TOKEN_FILE")"
-    procd_set_param respawn 300 5 5
-    procd_close_instance
+  [ -x "$GETTER" ] && "$GETTER" || true
+  [ -x "$CONFGEN" ] && "$CONFGEN" >/dev/null 2>&1 || true
+  [ -x "$LANDER" ] && "$LANDER" >/dev/null 2>&1 || true
+
+  if [ ! -s "$TOKEN_FILE" ]; then
+    echo "[cloudflared] token missing at $TOKEN_FILE"
+    return 0
+  fi
+
+  procd_open_instance
+  procd_set_param command "$PROG" --no-autoupdate \
+    --config "$CONF" \
+    tunnel run --token "$(cat "$TOKEN_FILE")"
+  procd_set_param respawn 5 10 5
+  procd_close_instance
 }
-
 stop_service() { :; }
-reload_service() { stop; start; }
-

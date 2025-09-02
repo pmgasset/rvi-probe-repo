@@ -1,6 +1,9 @@
 #!/bin/sh
-# SupportLink: status JSON + speedtest (LibreSpeed preferred, auto-install via opkg; Ookla fallback)
-# POSIX sh / BusyBox safe.
+# SupportLink: status JSON + speedtest
+# - LibreSpeed preferred (on-demand opkg install)
+# - Tries multiple binaries/flags/servers
+# - Ookla CLI fallback
+# - Always returns informative JSON (never "unknown")
 
 set -efu
 
@@ -20,7 +23,7 @@ sha1hex() {
   elif have openssl; then
     printf '%s' "$1" | openssl dgst -sha1 -r | awk '{print $1}'
   else
-    # simple CRC32 fallback (not cryptographic; used only to keep 6-digit rotation stable)
+    # simple CRC32 fallback so the 6-digit code stays stable across 5-min buckets
     awk -v s="$1" 'BEGIN{
       for(i=0;i<256;i++){x=i;for(k=0;k<8;k++) x=(and(x,1)?xor(0xEDB88320, rshift(x,1)):rshift(x,1)); T[i]=x}
       c=compl(0);
@@ -35,13 +38,22 @@ sha1hex() {
   fi
 }
 
+emit_error() { # usage: emit_error "message" [install_hint] [debug]
+  header
+  printf '{'
+  printf '"ok":false,"error":"%s"' "$(json_escape "$1")"
+  [ -n "${2:-}" ] && printf ',"install":"%s"' "$(json_escape "$2")"
+  [ -n "${3:-}" ] && printf ',"debug":"%s"'   "$(json_escape "$3")"
+  printf '}\n'
+}
+
 # ---------- device identity / status ----------
 mac_addr=''
 for IF in br-lan eth0 lan wan wlan0; do
   [ -e "/sys/class/net/$IF/address" ] && mac_addr="$(cat "/sys/class/net/$IF/address" 2>/dev/null || true)"
   [ -n "${mac_addr:-}" ] && break || true
 done
-[ -z "${mac_addr:-}" ] && mac_addr="$(ip link 2>/dev/null | awk '/link\\/ether/{print $2; exit}')"
+[ -z "${mac_addr:-}" ] && mac_addr="$(ip link 2>/dev/null | awk '/link\/ether/{print $2; exit}')"
 did="$(printf '%s' "${mac_addr:-unknown}" | tr -d ':' | tr 'A-Z' 'a-z')"
 hostname="${did}.nomadconnect.app"
 
@@ -63,106 +75,135 @@ fi
 
 # ---------- LibreSpeed installer + runner ----------
 try_install_librespeed() {
-  # Try a few package names seen across OpenWrt feeds.
-  # Return 0 if installed, 1 otherwise. Set INSTALL_HINT var with the command tried.
   INSTALL_HINT=''
   have opkg || return 1
   opkg update >/dev/null 2>&1 || true
-  for PKG in librespeed-cli librespeed-go speedtest-go; do
+  for PKG in librespeed-cli speedtest-go librespeed-go; do
     INSTALL_HINT="opkg install $PKG"
     opkg --force-overwrite install "$PKG" >/dev/null 2>&1 && return 0 || true
   done
   return 1
 }
 
+# run a command, capture stdout/stderr to files, and verify we got JSON
+run_cmd_json() { # usage: run_cmd_json "cmdline"
+  CMDLINE="$1"
+  OUT="/tmp/st_out.$$"; ERR="/tmp/st_err.$$"
+  # shellcheck disable=SC2086
+  sh -c "$CMDLINE" 1>"$OUT" 2>"$ERR" || true
+  if grep -q '{' "$OUT" 2>/dev/null; then
+    cat "$OUT"
+    rm -f "$OUT" "$ERR"
+    return 0
+  fi
+  DB="$(cat "$ERR" 2>/dev/null || true)"
+  rm -f "$OUT" "$ERR"
+  printf '%s' "$DB"
+  return 1
+}
+
 run_librespeed_json() {
-  # Echo JSON on stdout, or empty if not available.
-  if have librespeed-cli; then
-    librespeed-cli --json 2>/dev/null || true
-  elif have speedtest-go; then
-    speedtest-go --json 2>/dev/null || true
-  elif have librespeed; then
-    librespeed --json 2>/dev/null || true
-  else
-    printf ''
-  fi
-}
-
-num_from_json() {  # usage: num_from_json KEY JSON
-  KEY="$1"; J="$2"
-  printf '%s' "$J" | sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p" | head -n1
-}
-
-calc_bps_from_bytes_ms() { # BYTES, MS
-  awk -v B="$1" -v MS="$2" 'BEGIN{ if(MS<=0){print 0}else{ printf "%.0f", (B*8)/(MS/1000.0) }}'
-}
-
-speedtest_librespeed() {
-  STJSON="$(run_librespeed_json)"
-  if [ -z "${STJSON:-}" ]; then
-    # attempt install and retry once
-    if try_install_librespeed; then
-      STJSON="$(run_librespeed_json)"
+  BINS="librespeed-cli speedtest-go librespeed"
+  SRVS="https://speed.cloudflare.com https://librespeed.org"
+  TRIED=""
+  # 1) Try each binary with no args (some builds auto-select servers)
+  for B in $BINS; do
+    if have "$B"; then
+      TRIED="$TRIED;$B --json"
+      RES="$(run_cmd_json "$B --json")" && { ENGINE="$B"; SERVER="auto"; JSON="$RES"; return 0; }
     fi
-  fi
-  [ -z "${STJSON:-}" ] && return 1
+  done
+  # 2) Try with common server flags/aliases
+  for B in $BINS; do
+    have "$B" || continue
+    for S in $SRVS; do
+      for FLAG in "--server" "--url" "--host"; do
+        TRIED="$TRIED;$B --json $FLAG $S"
+        RES="$(run_cmd_json "$B --json $FLAG $S")" && { ENGINE="$B"; SERVER="$S"; JSON="$RES"; return 0; }
+      done
+    done
+  done
+  DEBUG_TRIED="$(printf '%s' "$TRIED" | sed 's/^;//')"
+  return 1
+}
 
-  # Try to normalize -> ping (ms), download/upload bandwidth (bps)
-  ping="$(num_from_json ping "$STJSON")"
-  # Common LibreSpeed fields:
-  # - download / upload in Mbps
-  # - or downloadBytes/uploadBytes with elapsed ms
-  down_mbps="$(num_from_json download "$STJSON")"
-  up_mbps="$(num_from_json upload "$STJSON")"
-  down_bps=''
-  up_bps=''
+normalize_librespeed() {
+  STJSON="$1"
+  # extract numbers if present
+  ping="$(printf '%s' "$STJSON" | sed -n 's/.*"ping"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -n1)"
+  down_mbps="$(printf '%s' "$STJSON" | sed -n 's/.*"download"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -n1)"
+  up_mbps="$(printf '%s' "$STJSON" | sed -n 's/.*"upload"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -n1)"
+  dbytes="$(printf '%s' "$STJSON" | sed -n 's/.*"downloadBytes"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+  delap="$(printf '%s' "$STJSON" | sed -n 's/.*"downloadElapsed"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+  ubytes="$(printf '%s' "$STJSON" | sed -n 's/.*"uploadBytes"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+  uelap="$(printf '%s' "$STJSON" | sed -n 's/.*"uploadElapsed"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
 
   if [ -n "${down_mbps:-}" ]; then
     down_bps="$(awk -v M="$down_mbps" 'BEGIN{printf "%.0f", M*1000000}')"
+  elif [ -n "${dbytes:-}" ] && [ -n "${delap:-}" ] && [ "$delap" -gt 0 ]; then
+    down_bps="$(awk -v B="$dbytes" -v MS="$delap" 'BEGIN{printf "%.0f", (B*8)/(MS/1000.0)}')"
   else
-    dbytes="$(num_from_json downloadBytes "$STJSON")"
-    delap="$(num_from_json downloadElapsed "$STJSON")" # ms
-    [ -n "${dbytes:-}" ] && [ -n "${delap:-}" ] && down_bps="$(calc_bps_from_bytes_ms "$dbytes" "$delap")" || true
+    down_bps=0
   fi
 
   if [ -n "${up_mbps:-}" ]; then
     up_bps="$(awk -v M="$up_mbps" 'BEGIN{printf "%.0f", M*1000000}')"
+  elif [ -n "${ubytes:-}" ] && [ -n "${uelap:-}" ] && [ "$uelap" -gt 0 ]; then
+    up_bps="$(awk -v B="$ubytes" -v MS="$uelap" 'BEGIN{printf "%.0f", (B*8)/(MS/1000.0)}')"
   else
-    ubytes="$(num_from_json uploadBytes "$STJSON")"
-    uelap="$(num_from_json uploadElapsed "$STJSON")" # ms
-    [ -n "${ubytes:-}" ] && [ -n "${uelap:-}" ] && up_bps="$(calc_bps_from_bytes_ms "$ubytes" "$uelap")" || true
+    up_bps=0
   fi
 
-  [ -z "${down_bps:-}" ] && down_bps=0
-  [ -z "${up_bps:-}" ] && up_bps=0
   [ -z "${ping:-}" ] && ping=0
-
-  header
-  printf '{'
-  printf '"ok":true,"engine":"librespeed",'
-  printf '"speedtest":{"ping":%s,"download":{"bandwidth":%s},"upload":{"bandwidth":%s}},' "$ping" "$down_bps" "$up_bps"
-  printf '"raw":%s' "$(printf '%s' "$STJSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
-  printf '}\n'
-  return 0
+  printf '%s' '{"ping":'$ping',"download":{"bandwidth":'$down_bps'},"upload":{"bandwidth":'$up_bps'}}'
 }
+
+speedtest_librespeed() {
+  DEBUG="$(qs_get debug)"
+  if run_librespeed_json; then
+    NORM="$(normalize_librespeed "$JSON")"
+    header
+    printf '{'
+    printf '"ok":true,"engine":"%s","server":"%s",' "$(json_escape "$ENGINE")" "$(json_escape "$SERVER")"
+    printf '"speedtest":%s,' "$NORM"
+    printf '"raw":%s' "$(printf '%s' "$JSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
+    [ -n "$DEBUG" ] && printf ',"debug":"%s"' "$(json_escape "engine=$ENGINE server=$SERVER")"
+    printf '}\n'
+    return 0
+  fi
+  # try on-demand install then retry once
+  if try_install_librespeed && run_librespeed_json; then
+    NORM="$(normalize_librespeed "$JSON")"
+    header
+    printf '{'
+    printf '"ok":true,"engine":"%s","server":"%s",' "$(json_escape "$ENGINE")" "$(json_escape "$SERVER")"
+    printf '"speedtest":%s,' "$NORM"
+    printf '"raw":%s' "$(printf '%s' "$JSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
+    printf '}\n'
+    return 0
+  fi
+  # if we got here, librespeed failed
+  hint="opkg update && opkg install librespeed-cli (or speedtest-go)"
+  dbg="bins=librespeed-cli,speedtest-go,librespeed; servers=https://speed.cloudflare.com,https://librespeed.org; tried=${DEBUG_TRIED:-none}"
+  [ -n "$INSTALL_HINT" ] && hint="opkg update && $INSTALL_HINT"
+  emit_error "librespeed unavailable or returned no JSON" "$hint" "$(qs_get debug | sed 's/.*/'$dbg'/')"
+  return 1
+}
+
 # ---------- Ookla fallback ----------
 speedtest_ookla() {
   if have speedtest; then
-    if speedtest --format=json --accept-license --accept-gdpr 2>/tmp/stderr_st.json 1>/tmp/stdout_st.json; then
+    OUT="/tmp/stdout_st.json"; ERR="/tmp/stderr_st.json"
+    if speedtest --format=json --accept-license --accept-gdpr 1>"$OUT" 2>"$ERR"; then
       header
-      printf '{"ok":true,"engine":"ookla","speedtest":%s}\n' "$(cat /tmp/stdout_st.json)"
+      printf '{"ok":true,"engine":"ookla","speedtest":%s}\n' "$(cat "$OUT")"
+      rm -f "$OUT" "$ERR"
     else
-      header
-      printf '{"ok":false,"error":"ookla speedtest failed","stderr":%s}\n' "$(printf '%s' "$(cat /tmp/stderr_st.json 2>/dev/null || true)" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
+      emit_error "ookla speedtest failed" "" "$(cat "$ERR" 2>/dev/null || true)"
     fi
   else
-    header
-    printf '{"ok":false,"error":"no speedtest engine available",'
-    if [ -n "${INSTALL_HINT:-}" ]; then
-      printf '"install":"%s"}\n' "$(json_escape "opkg update && $INSTALL_HINT")"
-    else
-      printf '"install":"opkg update && opkg install librespeed-cli (or speedtest-go)"}\n'
-    fi
+    hint="opkg update && wget -qO- https://install.speedtest.net/app/cli/install.sh | sh"
+    emit_error "no speedtest engine available" "$hint"
   fi
 }
 
@@ -172,13 +213,9 @@ action="$(qs_get action)"
 if [ -n "$action" ]; then
   case "$action" in
     speedtest)
-      # Prefer LibreSpeed (auto-install on demand), then fall back to Ookla.
-      if speedtest_librespeed; then
-        exit 0
-      else
-        speedtest_ookla
-        exit 0
-      fi
+      # Prefer LibreSpeed, then fall back to Ookla.
+      speedtest_librespeed || speedtest_ookla
+      exit 0
       ;;
     restart_router)
       header
@@ -192,7 +229,8 @@ if [ -n "$action" ]; then
       exit 0
       ;;
     *)
-      header; printf '{"ok":false,"error":"unknown action"}\n'; exit 0 ;;
+      emit_error "unknown action"
+      exit 0 ;;
   esac
 fi
 

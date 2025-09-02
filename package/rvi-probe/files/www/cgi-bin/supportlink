@@ -1,35 +1,59 @@
 #!/bin/sh
-printf "Content-Type: text/html\r\n\r\n"
-cat <<'HTML'
-<!doctype html><html><head><meta charset="utf-8"><title>RVInternetHelp Support</title>
-<style>body{font-family:system-ui,Segoe UI,Arial;margin:20px}.btn{display:inline-block;padding:10px 14px;margin:8px 8px 8px 0;border:1px solid #ccc;border-radius:10px;text-decoration:none}.badge{padding:2px 8px;border-radius:8px}pre{background:#f6f6f6;padding:10px;border-radius:8px;overflow:auto}.small{font-size:12px;color:#666}</style></head><body>
-<h1>RVInternetHelp — Support Panel</h1>
-<div>
-  <a class="btn" href="/cgi-bin/supportlink?act=share">Generate Share Code</a>
-  <a class="btn" href="/cgi-bin/supportlink?act=speed">Run Speed Test</a>
-  <a class="btn" href="/cgi-bin/supportlink?act=outage">Outage Check</a>
-  <a class="btn" href="/cgi-bin/supportlink?act=diag">Diagnostics</a>
-  <a class="btn" href="/cgi-bin/supportlink?act=cell">Cell Metrics</a>
-</div>
-<div class="small">Worker: $(uci -q get rviprobe.config.worker_url)</div>
-<div id="out"></div>
-HTML
-ACT="${QUERY_STRING#act=}"
-case "$ACT" in
-  share) CODE=$(/usr/bin/rvi-sharecode 2>/dev/null || echo ERR); echo "<h3>Share Code:</h3><pre>$CODE</pre>";;
-  speed) echo "<h3>Speed Test</h3><pre>$(/usr/bin/rvi-speedtest 2>&1)</pre>";;
-  outage) echo "<h3>Outage Check</h3><pre>$(/usr/bin/rvi-outage-check 2>&1)</pre>";;
-  diag) IF=$(uci -q get network.wan.ifname 2>/dev/null); IP=$(ip -4 addr show "$IF" 2>/dev/null | awk '/inet /{print $2}'); echo "<h3>Diagnostics</h3><pre>Host: $(hostname)
+WORKER_URL="$(uci -q get rviprobe.config.worker_url)"
+ACTION="${QUERY_STRING#action=}"
+case "$ACTION" in
+  share)
+    CODE=$(/usr/bin/rvi-sharecode 2>/dev/null || echo ERR)
+    OUT="<h3 class=\"text-lg font-semibold mb-2\">Share Code</h3><pre class=\"whitespace-pre-wrap\">$CODE</pre>"
+    ;;
+  speedtest)
+    OUT="<h3 class=\"text-lg font-semibold mb-2\">Speed Test</h3><pre class=\"whitespace-pre-wrap\">$({ /usr/bin/rvi-speedtest 2>&1; } )</pre>"
+    ;;
+  outage)
+    OUT="<h3 class=\"text-lg font-semibold mb-2\">Outage Check</h3><pre class=\"whitespace-pre-wrap\">$({ /usr/bin/rvi-outage-check 2>&1; } )</pre>"
+    ;;
+  diag)
+    IF=$(uci -q get network.wan.ifname 2>/dev/null)
+    IP=$(ip -4 addr show "$IF" 2>/dev/null | awk '/inet /{print $2}')
+    OUT="<h3 class=\"text-lg font-semibold mb-2\">Diagnostics</h3><pre class=\"whitespace-pre-wrap\">Host: $(hostname)
 Board: $(cat /tmp/sysinfo/board_name 2>/dev/null)
 Model: $(ubus -S call system board | jq -r .model 2>/dev/null)
 Firmware: $(ubus -S call system board | jq -r .release.description 2>/dev/null)
 WAN IF: $IF
 IP: $IP
 Ping: $(ping -c1 -W1 1.1.1.1 | awk -F'/' '/rtt/{print $5" ms"}')
-</pre>";;
-  cell) echo "<h3>Cell Metrics</h3><pre>$(/usr/lib/rvi-probe/cell.sh 2>&1)</pre>";;
-  *) echo "<p>Use the buttons above to run actions.</p>";;
+</pre>"
+    ;;
+  cell)
+    OUT="<h3 class=\"text-lg font-semibold mb-2\">Cell Metrics</h3><pre class=\"whitespace-pre-wrap\">$({ /usr/lib/rvi-probe/cell.sh 2>&1; } )</pre>"
+    ;;
+  *)
+    OUT="Use the buttons above to run actions."
+    ;;
 esac
-cat <<'HTML'
-</body></html>
-HTML
+printf "Content-Type: text/html; charset=UTF-8\r\n\r\n"
+cat <<EOF2
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>RVInternetHelp — Support Panel</title>
+<script src="https://cdn.tailwindcss.com" onerror="document.documentElement.classList.add('no-tw')"></script>
+<link rel="stylesheet" href="/static/rvi.css">
+</head>
+<body class="bg-gray-50 text-gray-800">
+<div class="container mx-auto max-w-3xl p-4">
+  <h1 class="text-2xl font-semibold mb-4">RVInternetHelp — Support Panel</h1>
+  <div class="flex flex-wrap gap-2 mb-4">
+    <a class="btn px-4 py-2 rounded-md border border-purple-700 text-purple-700 hover:bg-purple-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-purple-500" href="/cgi-bin/supportlink?action=share">Generate Share Code</a>
+    <a class="btn px-4 py-2 rounded-md border border-purple-700 text-purple-700 hover:bg-purple-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-purple-500" href="/cgi-bin/supportlink?action=speedtest">Run Speed Test</a>
+    <a class="btn px-4 py-2 rounded-md border border-purple-700 text-purple-700 hover:bg-purple-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-purple-500" href="/cgi-bin/supportlink?action=outage">Outage Check</a>
+    <a class="btn px-4 py-2 rounded-md border border-purple-700 text-purple-700 hover:bg-purple-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-purple-500" href="/cgi-bin/supportlink?action=diag">Diagnostics</a>
+    <a class="btn px-4 py-2 rounded-md border border-purple-700 text-purple-700 hover:bg-purple-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-purple-500" href="/cgi-bin/supportlink?action=cell">Cell Metrics</a>
+  </div>
+  <p class="small mb-4">Worker: ${WORKER_URL:-unset}</p>
+  <div id="output" class="card bg-white rounded-md shadow p-4 text-sm whitespace-pre-wrap">$OUT</div>
+</div>
+</body>
+</html>
+EOF2

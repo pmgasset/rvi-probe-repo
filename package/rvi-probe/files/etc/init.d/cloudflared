@@ -17,7 +17,7 @@ start_service() {
   fi
 
   procd_open_instance
-  procd_set_param command "$PROG" --no-autoupdate --edge-ip-version 4 --protocol http2 \
+  procd_set_param command "$PROG" --no-autoupdate \
     --config "$CONF" \
     tunnel run --token "$(cat "$TOKEN_FILE")"
   procd_set_param respawn 5 10 5

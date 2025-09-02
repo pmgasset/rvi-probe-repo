@@ -1,7 +1,45 @@
-<!DOCTYPE html>
-<html>
-<head><title>rvi-probe</title></head>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SupportLink</title>
+</head>
 <body>
-<h1>rvi-probe installed</h1>
+<h1>SupportLink</h1>
+<div id="status">Loading status…</div>
+<pre id="details"></pre>
+<pre id="outage"></pre>
+<script>
+async function loadStatus(){
+  try {
+    const r = await fetch('/cgi-bin/supportlink.api', {cache:'no-store'});
+    const j = await r.json();
+    document.getElementById('status').textContent = `Tunnel: ${j.tunnel.hostname} (${j.tunnel.state})\nInternet: ${j.internet}`;
+  } catch(e){
+    document.getElementById('status').textContent = 'Failed to load status';
+  }
+}
+async function loadDetails(){
+  try {
+    const r = await fetch('/cgi-bin/internet_details', {cache:'no-store'});
+    const j = await r.json();
+    document.getElementById('details').textContent = JSON.stringify(j, null, 2);
+  } catch(e){
+    document.getElementById('details').textContent = 'Failed to load details';
+  }
+}
+async function outage(provider){
+  try {
+    const r = await fetch(`/cgi-bin/outage_check?provider=${encodeURIComponent(provider)}`, {cache:'no-store'});
+    const j = await r.json();
+    document.getElementById('outage').textContent = JSON.stringify(j, null, 2);
+  } catch(e){
+    document.getElementById('outage').textContent = 'Failed to load outage info';
+  }
+}
+loadStatus();
+loadDetails();
+outage('default');
+</script>
 </body>
 </html>

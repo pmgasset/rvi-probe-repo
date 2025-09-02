@@ -1,0 +1,32 @@
+#!/bin/sh
+set -efu
+
+WORKER_URL="$(uci -q get rviprobe.config.worker_url || true)"
+[ -z "${WORKER_URL:-}" ] && WORKER_URL="https://status-hunter.traveldata.workers.dev"
+
+echo "Content-Type: application/json; charset=UTF-8"
+echo
+
+# 1) Try Worker (preferred schema)
+# Expected fields: ip, isp, type, asn, asname (optional), country, region, city, timestamp, source
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "${WORKER_URL%/}/internet" && exit 0 || true
+fi
+
+# 2) Fallback: ip-api.com
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "http://ip-api.com/json/?fields=status,message,query,as,asname,isp,org,country,regionName,city,timezone" \
+  | awk 'BEGIN{printf("{")} \
+    /"status":"success"/{ok=1} \
+    /"query":/ {gsub(/.*"query":"|".*/,"",$0); ip=$0} \
+    /"isp":/   {gsub(/.*"isp":"|".*/,"",$0); isp=$0} \
+    /"as":/    {gsub(/.*"as":"|".*/,"",$0); asn=$0} \
+    /"asname":/{gsub(/.*"asname":"|".*/,"",$0); asname=$0} \
+    /"country":/{gsub(/.*"country":"|".*/,"",$0); c=$0} \
+    /"regionName":/{gsub(/.*"regionName":"|".*/,"",$0); r=$0} \
+    /"city":/  {gsub(/.*"city":"|".*/,"",$0); ci=$0} \
+    END{ts=systime(); printf("\"ip\":\"%s\",\"isp\":\"%s\",\"asn\":\"%s\",\"asname\":\"%s\",\"country\":\"%s\",\"region\":\"%s\",\"city\":\"%s\",\"type\":\"public\",\"source\":\"ip-api\",\"timestamp\":%d}\n", ip, isp, asn, asname, c, r, ci, ts)}'
+  exit 0
+fi
+
+echo '{"status":"error","message":"no curl/worker"}'

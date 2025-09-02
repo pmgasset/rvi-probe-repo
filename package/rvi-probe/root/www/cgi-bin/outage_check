@@ -1,0 +1,23 @@
+#!/bin/sh
+set -efu
+
+# Parse provider from query string
+p="$(printf '%s' "${QUERY_STRING:-}" | sed -n 's/.*[?&]provider=\([^&]*\).*/\1/p')"
+p="$(printf '%s' "$p" | sed 's/%20/ /g')"
+
+WORKER_URL="$(uci -q get rviprobe.config.worker_url || true)"
+[ -z "${WORKER_URL:-}" ] && WORKER_URL="https://status-hunter.traveldata.workers.dev"
+
+echo "Content-Type: application/json; charset=UTF-8"
+echo
+
+if [ -z "$p" ]; then
+  echo '{"status":"unknown","summary":"provider missing"}'
+  exit 0
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "${WORKER_URL%/}/status?provider=$(printf '%s' "$p" | sed 's/ /%20/g')" || echo '{"status":"unknown"}'
+else
+  echo '{"status":"unknown"}'
+fi

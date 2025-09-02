@@ -5,12 +5,22 @@
 # - Runs against Cloudflare: https://speed.cloudflare.com
 # - Ookla CLI is used only if already installed
 # - Robust query parsing; emits exactly one JSON result
+# - FIX: valid JSON always (properly quoted "raw" or omitted)
+# - FIX: "bandwidth" returned in BYTES/SEC to match frontend (which multiplies by 8)
 
 set -efu
 
 # ---------- headers / helpers ----------
 header() { printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'; }
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# Properly quote a possibly multi-line string as a JSON string
+json_quote() {
+  awk 'BEGIN{printf("\"")} {
+    gsub(/\\/,"\\\\"); gsub(/"/,"\\\"");
+    gsub(/\r/,"\\r"); gsub(/\n/,"\\n"); gsub(/\t/,"\\t");
+    printf("%s", $0); if (NR<0) printf("\\n")
+  } END{printf("\"")}'
+}
 have() { command -v "$1" >/dev/null 2>&1; }
 
 urldecode(){ local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
@@ -46,10 +56,8 @@ if have curl; then WORKER_URL="$(uci -q get rviprobe.config.worker_url || true)"
 [ "$inet" = "unknown" ] && ping -c1 -W1 1.1.1.1 >/dev/null 2>&1 && inet="cell" || inet="$inet"
 
 # ---------- R2 layout ----------
-# default base; can be overridden by UCI (optional)
 R2_BASE="$(uci -q get rviprobe.config.r2_base || true)"; [ -z "${R2_BASE:-}" ] && R2_BASE="https://r2.rvinternethelp.com/librespeed"
 
-# Detect OpenWrt release (e.g. 23.05.3 -> 23.05) and arch (e.g. aarch64_cortex-a53)
 owrt_rel="$(sed -n "s/.*DISTRIB_RELEASE='\([^']*\)'.*/\1/p" /etc/openwrt_release 2>/dev/null | head -n1)"
 REL_SHORT="$(printf '%s' "$owrt_rel" | awk -F. '{print $1"."$2}')"
 ARCH="$(sed -n "s/.*DISTRIB_ARCH='\([^']*\)'.*/\1/p" /etc/openwrt_release 2>/dev/null | head -n1)"
@@ -60,46 +68,30 @@ if [ -z "$ARCH" ]; then
     *)             ARCH="unknown" ;;
   esac
 fi
-[ -z "$REL_SHORT" ] && REL_SHORT="23.05"  # sensible default
+[ -z "$REL_SHORT" ] && REL_SHORT="23.05"
 
 R2_DIR="${R2_BASE%/}/${REL_SHORT}/${ARCH}"
 R2_BIN="${R2_DIR}/librespeed-cli"
 R2_SUM="${R2_DIR}/SHA256SUMS"
 
 # ---------- fetch & verify ----------
-fetch(){ # usage: fetch URL OUT
-  local url="$1" out="$2"
-  if have curl; then curl -fsSL "$url" -o "$out"
-  elif have wget; then wget -q -O "$out" "$url"
-  else return 1; fi
-}
-
+fetch(){ if have curl; then curl -fsSL "$1" -o "$2"; elif have wget; then wget -q -O "$2" "$1"; else return 1; fi }
 sha256_of(){ if have sha256sum; then sha256sum "$1" | awk '{print $1}'; elif have openssl; then openssl dgst -sha256 "$1" | awk '{print $2}'; else echo ""; fi; }
 
 install_librespeed_from_r2(){
   command -v librespeed-cli >/dev/null 2>&1 && { LS_DBG="already_installed"; return 0; }
   local tmp="/tmp/librespeed-cli.$$" sums="/tmp/SHA256SUMS.$$" exp="" got=""
   LS_DBG="rel=${REL_SHORT}; arch=${ARCH}; dir=${R2_DIR}"
-
-  # fetch binary
   if ! fetch "$R2_BIN" "$tmp"; then LS_DBG="$LS_DBG; fetch_bin_failed"; return 1; fi
   chmod +x "$tmp" 2>/dev/null || true
-
-  # optional checksum verify
   if fetch "$R2_SUM" "$sums"; then
     exp="$(grep -E '[[:space:]]librespeed-cli$' "$sums" | awk '{print $1}' | head -n1 || true)"
     if [ -n "$exp" ]; then
       got="$(sha256_of "$tmp")"
-      if [ -z "$got" ] || [ "$got" != "$exp" ]; then
-        LS_DBG="$LS_DBG; sha_mismatch got=${got:-none} exp=$exp"
-        rm -f "$tmp" "$sums"
-        return 1
-      fi
+      if [ -z "$got" ] || [ "$got" != "$exp" ]; then LS_DBG="$LS_DBG; sha_mismatch got=${got:-none} exp=$exp"; rm -f "$tmp" "$sums"; return 1; fi
     fi
   fi
   rm -f "$sums"
-
-  # install to /usr/bin
   mv "$tmp" /usr/bin/librespeed-cli 2>/dev/null || cp "$tmp" /usr/bin/librespeed-cli
   chmod +x /usr/bin/librespeed-cli
   LS_DBG="$LS_DBG; installed=/usr/bin/librespeed-cli"
@@ -109,15 +101,13 @@ install_librespeed_from_r2(){
 # ---------- run Cloudflare test ----------
 CF_URL="https://speed.cloudflare.com"
 
-run_cmd_json(){ # usage: run_cmd_json "cmd"
-  local CMD="$1" OUT="/tmp/st_out.$$" ERR="/tmp/st_err.$$"
-  sh -c "$CMD" 1>"$OUT" 2>"$ERR" || true
-  if grep -q '{' "$OUT" 2>/dev/null; then cat "$OUT"; rm -f "$OUT" "$ERR"; return 0; fi
-  DBG="$(cat "$ERR" 2>/dev/null || true)"; rm -f "$OUT" "$ERR"; printf '%s' "$DBG"; return 1
-}
+run_cmd_json(){ local CMD="$1" OUT="/tmp/st_out.$$" ERR="/tmp/st_err.$$"; sh -c "$CMD" 1>"$OUT" 2>"$ERR" || true; if grep -q '{' "$OUT" 2>/dev/null; then cat "$OUT"; rm -f "$OUT" "$ERR"; return 0; fi; DBG="$(cat "$ERR" 2>/dev/null || true)"; rm -f "$OUT" "$ERR"; printf '%s' "$DBG"; return 1; }
 
-normalize_ls_json(){ # -> {"ping":ms,"download":{"bandwidth":bps},"upload":{"bandwidth":bps}}
-  local ST="$1" ping dmb umb dB dT uB uT down_bps up_bps
+# Normalize to UI contract: bandwidth must be BYTES/SEC (frontend multiplies by 8)
+normalize_ls_json_to_bytes(){
+  # INPUT: $1 raw JSON; OUTPUT to stdout a fragment:
+  # {"ping":<ms>,"download":{"bandwidth":<bytes/s>},"upload":{"bandwidth":<bytes/s>}}
+  local ST="$1" ping dmb umb dB dT uB uT down_bps up_bps down_Bps up_Bps
   ping="$(printf '%s' "$ST" | sed -n 's/.*"ping"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -n1)"
   dmb="$(printf '%s' "$ST" | sed -n 's/.*"download"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -n1)"
   umb="$(printf '%s' "$ST" | sed -n 's/.*"upload"[[:space:]]*:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -n1)"
@@ -126,14 +116,17 @@ normalize_ls_json(){ # -> {"ping":ms,"download":{"bandwidth":bps},"upload":{"ban
   uB="$(printf '%s' "$ST" | sed -n 's/.*"uploadBytes"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
   uT="$(printf '%s' "$ST" | sed -n 's/.*"uploadElapsed"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
 
+  # Compute bits/sec first, then convert to BYTES/sec (divide by 8)
   if [ -n "$dmb" ]; then down_bps="$(awk -v M="$dmb" 'BEGIN{printf "%.0f", M*1000000}')"
   elif [ -n "$dB" ] && [ -n "$dT" ] && [ "$dT" -gt 0 ]; then down_bps="$(awk -v B="$dB" -v MS="$dT" 'BEGIN{printf "%.0f", (B*8)/(MS/1000.0)}')"; else down_bps=0; fi
-
   if [ -n "$umb" ]; then up_bps="$(awk -v M="$umb" 'BEGIN{printf "%.0f", M*1000000}')"
   elif [ -n "$uB" ] && [ -n "$uT" ] && [ "$uT" -gt 0 ]; then up_bps="$(awk -v B="$uB" -v MS="$uT" 'BEGIN{printf "%.0f", (B*8)/(MS/1000.0)}')"; else up_bps=0; fi
 
+  down_Bps="$(awk -v B="$down_bps" 'BEGIN{printf "%.0f", B/8}')"
+  up_Bps="$(awk -v B="$up_bps"   'BEGIN{printf "%.0f", B/8}')"
   [ -z "$ping" ] && ping=0
-  printf '{"ping":%s,"download":{"bandwidth":%s},"upload":{"bandwidth":%s}}' "$ping" "$down_bps" "$up_bps"
+
+  printf '{"ping":%s,"download":{"bandwidth":%s},"upload":{"bandwidth":%s}}' "$ping" "$down_Bps" "$up_Bps"
 }
 
 run_librespeed_cloudflare(){
@@ -141,14 +134,14 @@ run_librespeed_cloudflare(){
   if command -v librespeed-cli >/dev/null 2>&1; then
     for F in "--server" "--url" "--host" ""; do
       [ -n "$F" ] && TRIED="$TRIED;librespeed-cli --json $F $CF_URL" || TRIED="$TRIED;librespeed-cli --json"
-      JSON="$(run_cmd_json "librespeed-cli --json $F $CF_URL")" && { NORM="$(normalize_ls_json "$JSON")"; ENGINE="librespeed-cli"; TRIED="${TRIED#;}"; return 0; }
+      JSON="$(run_cmd_json "librespeed-cli --json $F $CF_URL")" && { NORM="$(normalize_ls_json_to_bytes "$JSON")"; ENGINE="librespeed-cli"; TRIED="${TRIED#;}"; return 0; }
     done
   fi
   TRIED="${TRIED#;}"
   return 1
 }
 
-# ---------- Ookla fallback (only if already present) ----------
+# ---------- Ookla fallback (only if present) ----------
 run_ookla_if_present(){
   if command -v speedtest >/dev/null 2>&1; then
     local OUT="/tmp/stdout_st.json" ERR="/tmp/stderr_st.json"
@@ -161,23 +154,34 @@ run_ookla_if_present(){
 
 # ---------- routing ----------
 action="$(qs_get action)"
+CF_URL="https://speed.cloudflare.com"
 
 if [ -n "$action" ]; then
   case "$action" in
     speedtest)
-      # 1) try to run if already present
+      # Already installed?
       if run_librespeed_cloudflare; then
-        header; printf '{"ok":true,"engine":"%s","server":"%s","speedtest":%s,"raw":%s' "$ENGINE" "$CF_URL" "$NORM" "$(printf '%s' "$JSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
+        header
+        printf '{"ok":true,"engine":"%s","server":"%s","speedtest":%s' "$ENGINE" "$CF_URL" "$NORM"
+        if [ -n "${JSON:-}" ]; then
+          printf ',"raw":'; printf '%s' "$JSON" | json_quote
+        fi
         [ -n "$(qs_get debug)" ] && printf ',"debug":"tried=%s"' "$(json_escape "$TRIED")"
-        printf '}\n'; exit 0
+        printf '}\n'
+        exit 0
       fi
-      # 2) not installed → fetch from R2 then retry once
+      # Install from R2 then retry once
       if install_librespeed_from_r2 && run_librespeed_cloudflare; then
-        header; printf '{"ok":true,"engine":"%s","server":"%s","speedtest":%s,"raw":%s' "$ENGINE" "$CF_URL" "$NORM" "$(printf '%s' "$JSON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/')"
+        header
+        printf '{"ok":true,"engine":"%s","server":"%s","speedtest":%s' "$ENGINE" "$CF_URL" "$NORM"
+        if [ -n "${JSON:-}" ]; then
+          printf ',"raw":'; printf '%s' "$JSON" | json_quote
+        fi
         [ -n "$(qs_get debug)" ] && printf ',"debug":"installed_from_r2; %s; tried=%s"' "$(json_escape "$LS_DBG")" "$(json_escape "$TRIED")"
-        printf '}\n'; exit 0
+        printf '}\n'
+        exit 0
       fi
-      # 3) last resort: Ookla if present
+      # Last resort: Ookla if present
       if run_ookla_if_present; then exit 0; fi
       emit_error "no speedtest client available" "ensure ${R2_DIR} contains librespeed-cli and SHA256SUMS" "${LS_DBG:-not_installed}"
       exit 0

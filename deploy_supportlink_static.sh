@@ -1,3 +1,12 @@
+#!/bin/sh
+set -euo pipefail
+
+INDEX="/www/index.html"
+if [ -f "$INDEX" ] && [ ! -f "$INDEX.bak" ]; then
+  cp "$INDEX" "$INDEX.bak"
+fi
+
+cat <<'HTML' > "$INDEX"
 <!doctype html>
 <html lang="en">
 <head>
@@ -210,3 +219,19 @@ document.querySelectorAll('#providerChips .chip').forEach(chip => {
 </script>
 </body>
 </html>
+HTML
+
+# ensure cgi_prefix in uhttpd
+if ! uci show uhttpd 2>/dev/null | grep -q "cgi_prefix.*=/cgi-bin"; then
+  uci add_list uhttpd.main.cgi_prefix='/cgi-bin'
+  uci commit uhttpd
+fi
+
+/etc/init.d/uhttpd restart
+[ -x /etc/init.d/cloudflared ] && /etc/init.d/cloudflared restart
+
+echo "Verify with:"
+echo "  curl -I http://127.0.0.1/"
+echo "  curl http://127.0.0.1/cgi-bin/supportlink"
+echo "  curl http://127.0.0.1/cgi-bin/internet_details"
+echo "  curl http://127.0.0.1/cgi-bin/outage_check?provider=att"

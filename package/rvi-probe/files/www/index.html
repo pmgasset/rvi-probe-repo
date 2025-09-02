@@ -64,7 +64,7 @@
 
     <div class="grid" id="stats">
       <div class="stat"><span class="k">Hostname</span><span class="v mono" id="host">—</span></div>
-      <div class="stat"><span class="k">Device ID</span><span class="v mono" id="did">—</span></div>
+      <div class="stat"><span class="k">Tunnel ID</span><span class="v mono" id="did">—</span></div>
       <div class="stat"><span class="k">Share Code (tell support)</span><span class="v mono" id="code">—</span><span class="small muted">Changes every 5 minutes</span></div>
       <div class="stat"><span class="k">Internet</span><span class="v" id="inet">—</span></div>
     </div>
@@ -192,10 +192,10 @@ async function getStatus(){
   try{
     const r = await fetch('/cgi-bin/supportlink', {cache:'no-store'});
     const j = await r.json();
-    currentHost = (j && j.tunnel && j.tunnel.hostname) || '';
+    currentHost = j.host || (j.tunnel && j.tunnel.hostname) || '';
     host.textContent = currentHost || '—';
-    did.textContent  = (j && j.tunnel && j.tunnel.id) || '—';
-    inet.textContent = (j && j.internet || '—').toUpperCase();
+    did.textContent  = j.tunnel_id || j.device_id || (j.tunnel && j.tunnel.id) || '—';
+    inet.textContent = j.isp || j.internet || j.status_text || '—';
     setPill((j && j.tunnel && j.tunnel.state) || 'down');
     await ensureCode(j && j.tunnel && j.tunnel.code);
     lastFetch = Date.now();

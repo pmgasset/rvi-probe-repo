@@ -46,21 +46,24 @@ fi
 
 CODE=$( /usr/bin/rvi-sharecode 2>/dev/null || echo "" )
 
-if ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; then
+ISP=""
+if curl -fs --connect-timeout 5 --max-time 5 https://1.1.1.1 >/dev/null 2>&1; then
     INTERNET="online"
     STATUS="ok"
     STATUS_TEXT="Online"
+    ISP=$(curl -fs --connect-timeout 5 --max-time 5 http://ip-api.com/line?fields=isp 2>/dev/null | head -n1)
 else
     INTERNET="offline"
     STATUS="bad"
     STATUS_TEXT="Offline"
 fi
 
-printf '{"host":"%s","device_id":"%s","code":"%s","internet":"%s","status":"%s","status_text":"%s","tunnel":{"hostname":"%s","id":"%s","state":"%s","code":"%s"}}\n' \
+printf '{"host":"%s","tunnel_id":"%s","code":"%s","internet":"%s","isp":"%s","status":"%s","status_text":"%s","tunnel":{"hostname":"%s","id":"%s","state":"%s","code":"%s"}}\n' \
   "$(json_escape "$HOST")" \
   "$(json_escape "$ID")" \
   "$(json_escape "$CODE")" \
   "$(json_escape "$INTERNET")" \
+  "$(json_escape "$ISP")" \
   "$(json_escape "$STATUS")" \
   "$(json_escape "$STATUS_TEXT")" \
   "$(json_escape "$TUN_HOST")" \

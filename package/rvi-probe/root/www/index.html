@@ -198,7 +198,7 @@ btnInetDetails.onclick = async ()=>{
   inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
   outageResults.innerHTML = '';
   try{
-    const j = await fetchJSON('/cgi-bin/internet_details');
+    const j = await fetchJSON('/cgi-bin/internet-details');
     if (j?.isp || j?.asname || j?.asn) inet.textContent = j.isp || j.asname || j.asn || '—';
     const ts = j?.timestamp ? new Date(j.timestamp*1000).toLocaleString() : '—';
     inetBody.innerHTML = `

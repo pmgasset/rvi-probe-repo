@@ -1,43 +1,67 @@
 #!/bin/sh
-# Provider status via StatusHunter Worker, cached 5 minutes under /tmp
+# Provider outage status via StatusHunter worker, with URL-decoding + 5min cache.
+
 set -efu
 
-echo "Content-Type: application/json; charset=UTF-8"
-echo "Cache-Control: no-store"
-echo
+printf 'Content-Type: application/json; charset=UTF-8\r\n'
+printf 'Cache-Control: no-store\r\n\r\n'
 
-qs_get() {
-  key="$1"
-  val="$(printf '%s' "${QUERY_STRING:-}" | sed -n "s/.*[?&]$key=\([^&]*\).*/\1/p")"
-  printf '%s' "$val" | sed -e 's/+/%20/g' -e 's/%20/ /g'
+# --- helpers ---
+urldecode() { # BusyBox-safe URL decoder
+  # replace + with space, then %XX to \xXX and printf %b
+  local s="${1//+/ }"
+  printf '%b' "${s//%/\\x}"
 }
-
-provider="$(qs_get provider)"
-[ -z "$provider" ] && { echo '{"status":"unknown","summary":"provider missing"}'; exit 0; }
+qs_get() { # read provider=name from QUERY_STRING robustly
+  local qs="${QUERY_STRING:-}" kv k v
+  IFS='&' read -r -a kv <<EOFQS || true
+$qs
+EOFQS
+  for pair in $qs; do
+    k="${pair%%=*}"; v="${pair#*=}"
+    [ "$k" = "$1" ] && { urldecode "$v"; return 0; }
+  done
+  return 1
+}
 
 WORKER_URL="$(uci -q get rviprobe.config.worker_url || true)"
 [ -z "${WORKER_URL:-}" ] && WORKER_URL="https://status-hunter.traveldata.workers.dev"
 
-cache="/tmp/outage_$(printf '%s' "$provider" | tr ' A-Z' '_a-z').json"
-cts="/tmp/outage_$(printf '%s' "$provider" | tr ' A-Z' '_a-z').ts"
-now="$(date +%s 2>/dev/null || busybox date +%s)"
+provider="$(qs_get provider || true)"
+if [ -z "${provider:-}" ]; then
+  printf '{"status":"unknown","summary":"provider missing"}'
+  exit 0
+fi
+
+# normalize a few aliases to worker slugs if needed
+case "$provider" in
+  m365|o365|office365|microsoft%20365) provider="m365" ;;
+  disney+|disneyplus) provider="disneyplus" ;;
+  t-mobile|tmus|tmo) provider="tmobile" ;;
+  comcast|xfinity*) provider="xfinity" ;;
+esac
+
+# cache
+slug="$(printf '%s' "$provider" | tr ' A-Z' '_a-z')"
+CACHE="/tmp/outage_${slug}.json"
+TS="/tmp/outage_${slug}.ts"
+NOW="$(date +%s 2>/dev/null || busybox date +%s)"
 TTL=300
 
-if [ -s "$cache" ] && [ -s "$cts" ]; then
-  ts="$(cat "$cts" 2>/dev/null || echo 0)"
-  age=$((now - ts))
-  if [ "$age" -lt "$TTL" ]; then
-    cat "$cache"
+if [ -s "$CACHE" ] && [ -s "$TS" ]; then
+  AGE=$((NOW - $(cat "$TS" 2>/dev/null || echo 0)))
+  if [ "$AGE" -lt "$TTL" ]; then
+    cat "$CACHE"
     exit 0
   fi
 fi
 
 if command -v curl >/dev/null 2>&1; then
-  if curl -fsSL "${WORKER_URL%/}/status?provider=$(printf '%s' "$provider" | sed 's/ /%20/g')" -o "$cache"; then
-    printf '%s' "$now" > "$cts"
-    cat "$cache"
+  if curl -fsSL "${WORKER_URL%/}/status?provider=$(printf '%s' "$provider" | sed 's/ /%20/g')" -o "$CACHE"; then
+    printf '%s' "$NOW" > "$TS"
+    cat "$CACHE"
     exit 0
   fi
 fi
 
-echo '{"status":"unknown"}'
+printf '{"status":"unknown"}'

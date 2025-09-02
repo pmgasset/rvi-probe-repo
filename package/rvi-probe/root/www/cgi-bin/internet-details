@@ -1,0 +1,64 @@
+#!/bin/sh
+# Internet details (StatusHunter worker first, ip-api fallback; normalizes fields)
+# BusyBox/POSIX sh compatible; no jq dependency.
+
+set -efu
+
+printf 'Content-Type: application/json; charset=UTF-8\r\n'
+printf 'Cache-Control: no-store\r\n\r\n'
+
+WORKER_URL="$(uci -q get rviprobe.config.worker_url || true)"
+[ -z "${WORKER_URL:-}" ] && WORKER_URL="https://status-hunter.traveldata.workers.dev"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Try worker first. If it returns valid JSON containing "ip", pass through as-is.
+if have curl; then
+  WORKER_RESP="$(curl -fsSL "${WORKER_URL%/}/internet" 2>/dev/null || true)"
+  case "$WORKER_RESP" in
+    *\"ip\"* )
+      # Some workers omit ISP/ASN occasionally; still return it (UI shows what exists).
+      printf '%s' "$WORKER_RESP"
+      exit 0
+      ;;
+  esac
+fi
+
+# ---- Fallback: ip-api.com ----
+# We normalize to:
+# { "ip","isp","asn","asname","country","region","city","type":"public","source":"ip-api","timestamp":<unix> }
+
+if have curl; then
+  RESP="$(curl -fsSL 'http://ip-api.com/json/?fields=status,message,query,as,asname,isp,org,country,regionName,city,proxy,hosting,mobile' 2>/dev/null || true)"
+else
+  RESP=""
+fi
+
+ts="$(date +%s 2>/dev/null || busybox date +%s)"
+
+# Simple JSON value extractor (string only)
+val() {
+  # usage: val KEY
+  printf '%s' "$RESP" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"
+}
+
+status="$(printf '%s' "$RESP" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')"
+ip="$(val query)"
+isp="$(val isp)"
+asn="$(val as)"
+asname="$(val asname)"
+country="$(val country)"
+region="$(val regionName)"
+city="$(val city)"
+
+# Emit normalized JSON. Values may be empty if ip-api masked them; UI handles "—".
+printf '{'
+printf '"ip":"%s",'    "$(printf '%s' "$ip")"
+printf '"isp":"%s",'   "$(printf '%s' "$isp")"
+printf '"asn":"%s",'   "$(printf '%s' "$asn")"
+printf '"asname":"%s",' "$(printf '%s' "$asname")"
+printf '"country":"%s",' "$(printf '%s' "$country")"
+printf '"region":"%s",'  "$(printf '%s' "$region")"
+printf '"city":"%s",'    "$(printf '%s' "$city")"
+printf '"type":"public","source":"ip-api","timestamp":%s' "$ts"
+printf '}\n'

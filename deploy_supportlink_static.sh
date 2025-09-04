@@ -73,7 +73,7 @@ cat <<'HTML' > "$INDEX"
 
     <div class="grid" id="stats">
       <div class="stat"><span class="k">Hostname</span><span class="v mono" id="host">—</span></div>
-      <div class="stat"><span class="k">Device ID</span><span class="v mono" id="did">—</span></div>
+      <div class="stat"><span class="k">Tunnel ID</span><span class="v mono" id="did">—</span></div>
       <div class="stat"><span class="k">Share Code (tell support)</span><span class="v mono" id="code">—</span><span class="small muted">Changes every 5 minutes</span></div>
       <div class="stat"><span class="k">Internet</span><span class="v" id="inet">—</span></div>
     </div>
@@ -160,9 +160,9 @@ async function refresh() {
     const r = await fetch('/cgi-bin/supportlink');
     const j = await r.json();
     host.textContent = j.host || j.hostname || '—';
-    did.textContent = j.device_id || j.did || '—';
+    did.textContent = j.tunnel_id || j.device_id || (j.tunnel && j.tunnel.id) || j.did || '—';
     code.textContent = j.code || j.share_code || '—';
-    inet.textContent = j.internet || j.status_text || '—';
+    inet.textContent = j.isp || j.internet || j.status_text || '—';
     const st = j.status || 'warn';
     statusPill.className = 'pill ' + st;
     statusPill.textContent = j.status_text || st;
@@ -193,7 +193,7 @@ document.getElementById('btnReboot').onclick = async () => {
 document.getElementById('btnInetDetails').onclick = async () => {
   inetModal.classList.add('open');
   inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
-  const r = await fetch('/cgi-bin/internet_details');
+  const r = await fetch('/cgi-bin/internet-details');
   const d = await r.json();
   inetBody.innerHTML = '<pre class="mono small">' + JSON.stringify(d, null, 2) + '</pre>';
 };
@@ -233,5 +233,5 @@ fi
 echo "Verify with:"
 echo "  curl -I http://127.0.0.1/"
 echo "  curl http://127.0.0.1/cgi-bin/supportlink"
-echo "  curl http://127.0.0.1/cgi-bin/internet_details"
+echo "  curl http://127.0.0.1/cgi-bin/internet-details"
 echo "  curl http://127.0.0.1/cgi-bin/outage_check?provider=att"

@@ -1,0 +1,38 @@
+#!/bin/sh
+printf "Content-Type: application/json\r\n\r\n"
+
+json_escape() {
+    printf '%s' "$1" | sed \
+        -e 's/\\/\\\\/g' \
+        -e 's/"/\\"/g' \
+        -e 's/\x08/\\b/g' \
+        -e 's/\x0c/\\f/g' \
+        -e 's/\n/\\n/g' \
+        -e 's/\r/\\r/g' \
+        -e 's/\t/\\t/g'
+}
+
+WORKER_URL="$(uci -q get rviprobe.config.worker_url 2>/dev/null)"
+DATA=""
+if [ -n "$WORKER_URL" ]; then
+    DATA="$(curl -fsL "$WORKER_URL/internet-details" 2>/dev/null)"
+fi
+if [ -z "$DATA" ]; then
+    DATA="$(curl -fsL 'http://ip-api.com/json/?fields=isp,asn,asname,country,regionName,city' 2>/dev/null)"
+fi
+
+ISP="$(printf '%s' "$DATA" | awk -F'"isp":"' '{print $2}' | awk -F'"' '{print $1}')"
+ASN="$(printf '%s' "$DATA" | awk -F'"asn":' '{print $2}' | awk -F'[,}]' '{print $1}')"
+ASNAME="$(printf '%s' "$DATA" | awk -F'"asname":"' '{print $2}' | awk -F'"' '{print $1}')"
+COUNTRY="$(printf '%s' "$DATA" | awk -F'"country":"' '{print $2}' | awk -F'"' '{print $1}')"
+REGION="$(printf '%s' "$DATA" | awk -F'"regionName":"' '{print $2}' | awk -F'"' '{print $1}')"
+CITY="$(printf '%s' "$DATA" | awk -F'"city":"' '{print $2}' | awk -F'"' '{print $1}')"
+
+printf '{"isp":"%s","asn":"%s","asname":"%s","country":"%s","region":"%s","city":"%s"}\n' \
+    "$(json_escape "$ISP")" \
+    "$(json_escape "$ASN")" \
+    "$(json_escape "$ASNAME")" \
+    "$(json_escape "$COUNTRY")" \
+    "$(json_escape "$REGION")" \
+    "$(json_escape "$CITY")"
+

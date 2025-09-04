@@ -29,11 +29,13 @@
   .accent{border-color:#1e40af}
   .danger{border-color:#7f1d1d}
   .wide{width:100%}
-  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace}
+  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;overflow-wrap:anywhere}
   .small{font-size:12px}
   .hr{height:1px;background:#1f2937;margin:16px 0}
   .log{background:#0b1022;border:1px solid #1f2937;border-radius:12px;padding:12px;white-space:pre-wrap;max-height:300px;overflow:auto}
   .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+
+  .span2{grid-column:span 2}
 
   /* Modal + chips */
   .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:16px;z-index:1000;background:rgba(0,0,0,.45)}
@@ -63,8 +65,8 @@
     <p class="sub">Fast help from RV Internet Help. Keep this page open if you’re on the phone with support.</p>
 
     <div class="grid" id="stats">
-      <div class="stat"><span class="k">Hostname</span><span class="v mono" id="host">—</span></div>
-      <div class="stat"><span class="k">Device ID</span><span class="v mono" id="did">—</span></div>
+      <div class="stat span2"><span class="k">Hostname</span><span class="v mono" id="host">—</span></div>
+      <div class="stat span2"><span class="k">Tunnel ID</span><span class="v mono" id="did">—</span></div>
       <div class="stat"><span class="k">Share Code (tell support)</span><span class="v mono" id="code">—</span><span class="small muted">Changes every 5 minutes</span></div>
       <div class="stat"><span class="k">Internet</span><span class="v" id="inet">—</span></div>
     </div>
@@ -192,10 +194,10 @@ async function getStatus(){
   try{
     const r = await fetch('/cgi-bin/supportlink', {cache:'no-store'});
     const j = await r.json();
-    currentHost = (j && j.tunnel && j.tunnel.hostname) || '';
+    currentHost = j.host || (j.tunnel && j.tunnel.hostname) || '';
     host.textContent = currentHost || '—';
-    did.textContent  = (j && j.tunnel && j.tunnel.id) || '—';
-    inet.textContent = (j && j.internet || '—').toUpperCase();
+    did.textContent  = j.tunnel_id || j.device_id || (j.tunnel && j.tunnel.id) || '—';
+    inet.textContent = j.isp || j.internet || j.status_text || '—';
     setPill((j && j.tunnel && j.tunnel.state) || 'down');
     await ensureCode(j && j.tunnel && j.tunnel.code);
     lastFetch = Date.now();
@@ -216,7 +218,7 @@ btnInetDetails.onclick = async ()=>{
   inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
   outageResults.innerHTML = '';
   try{
-    const r = await fetch('/cgi-bin/internet_details', {cache:'no-store'});
+    const r = await fetch('/cgi-bin/internet-details', {cache:'no-store'});
     const txt = await r.text();
     let j; try{ j = JSON.parse(txt); }catch{ throw new Error('Bad JSON from CGI: '+txt.slice(0,120)); }
     if (j.status === 'error') throw new Error(j.message || 'lookup failed');

@@ -1,35 +1,77 @@
 #!/bin/sh
-printf "Content-Type: text/html\r\n\r\n"
-cat <<'HTML'
-<!doctype html><html><head><meta charset="utf-8"><title>RVInternetHelp Support</title>
-<style>body{font-family:system-ui,Segoe UI,Arial;margin:20px}.btn{display:inline-block;padding:10px 14px;margin:8px 8px 8px 0;border:1px solid #ccc;border-radius:10px;text-decoration:none}.badge{padding:2px 8px;border-radius:8px}pre{background:#f6f6f6;padding:10px;border-radius:8px;overflow:auto}.small{font-size:12px;color:#666}</style></head><body>
-<h1>RVInternetHelp — Support Panel</h1>
-<div>
-  <a class="btn" href="/cgi-bin/supportlink?act=share">Generate Share Code</a>
-  <a class="btn" href="/cgi-bin/supportlink?act=speed">Run Speed Test</a>
-  <a class="btn" href="/cgi-bin/supportlink?act=outage">Outage Check</a>
-  <a class="btn" href="/cgi-bin/supportlink?act=diag">Diagnostics</a>
-  <a class="btn" href="/cgi-bin/supportlink?act=cell">Cell Metrics</a>
-</div>
-<div class="small">Worker: $(uci -q get rviprobe.config.worker_url)</div>
-<div id="out"></div>
-HTML
-ACT="${QUERY_STRING#act=}"
-case "$ACT" in
-  share) CODE=$(/usr/bin/rvi-sharecode 2>/dev/null || echo ERR); echo "<h3>Share Code:</h3><pre>$CODE</pre>";;
-  speed) echo "<h3>Speed Test</h3><pre>$(/usr/bin/rvi-speedtest 2>&1)</pre>";;
-  outage) echo "<h3>Outage Check</h3><pre>$(/usr/bin/rvi-outage-check 2>&1)</pre>";;
-  diag) IF=$(uci -q get network.wan.ifname 2>/dev/null); IP=$(ip -4 addr show "$IF" 2>/dev/null | awk '/inet /{print $2}'); echo "<h3>Diagnostics</h3><pre>Host: $(hostname)
-Board: $(cat /tmp/sysinfo/board_name 2>/dev/null)
-Model: $(ubus -S call system board | jq -r .model 2>/dev/null)
-Firmware: $(ubus -S call system board | jq -r .release.description 2>/dev/null)
-WAN IF: $IF
-IP: $IP
-Ping: $(ping -c1 -W1 1.1.1.1 | awk -F'/' '/rtt/{print $5" ms"}')
-</pre>";;
-  cell) echo "<h3>Cell Metrics</h3><pre>$(/usr/lib/rvi-probe/cell.sh 2>&1)</pre>";;
-  *) echo "<p>Use the buttons above to run actions.</p>";;
-esac
-cat <<'HTML'
-</body></html>
-HTML
+# JSON status endpoint for SupportLink dashboard
+printf "Content-Type: application/json\r\n\r\n"
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+json_escape() {
+    printf '%s' "$1" | sed \
+        -e 's/\\/\\\\/g' \
+        -e 's/"/\\"/g' \
+        -e 's/\x08/\\b/g' \
+        -e 's/\x0c/\\f/g' \
+        -e 's/\n/\\n/g' \
+        -e 's/\r/\\r/g' \
+        -e 's/\t/\\t/g'
+}
+
+# Find a stable MAC to use as device ID
+pick_mac() {
+    for IF in eth0 eth1 wan wwan0 wwan1 usb0 usb1; do
+        [ -f "/sys/class/net/$IF/address" ] || continue
+        MAC=$(cat "/sys/class/net/$IF/address" 2>/dev/null | tr -d ':\n' | tr 'A-Z' 'a-z')
+        echo "$MAC" | grep -qE '^[0-9a-f]{12}$' && { echo "$MAC"; return 0; }
+    done
+    for IF in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+        [ -f "/sys/class/net/$IF/address" ] || continue
+        MAC=$(cat "/sys/class/net/$IF/address" 2>/dev/null | tr -d ':\n' | tr 'A-Z' 'a-z')
+        echo "$MAC" | grep -qE '^[0-9a-f]{12}$' && { echo "$MAC"; return 0; }
+    done
+    return 1
+}
+
+HOST=$(hostname 2>/dev/null)
+ID=$(cat /etc/rvi/cloudflared.tunnel_id 2>/dev/null)
+[ -n "$ID" ] || ID=$(pick_mac 2>/dev/null || echo "")
+
+TUN_HOST=$(cat /etc/rvi/device_host 2>/dev/null)
+[ -n "$TUN_HOST" ] || TUN_HOST="$HOST"
+
+# Determine tunnel state by checking for cloudflared
+if pidof cloudflared >/dev/null 2>&1; then
+    TUN_STATE="up"
+else
+    TUN_STATE="down"
+fi
+
+CODE=$( /usr/bin/rvi-sharecode 2>/dev/null || echo "" )
+
+# Probe HTTPS connectivity; treat failure as offline
+if curl -fs --connect-timeout 5 https://one.one.one.one >/dev/null 2>&1; then
+    INTERNET="online"
+    STATUS="ok"
+    STATUS_TEXT="Online"
+else
+    INTERNET="offline"
+    STATUS="bad"
+    STATUS_TEXT="Offline"
+fi
+
+# Query ip-api.com only to populate ISP
+API=$(curl -fs --connect-timeout 5 --max-time 5 "http://ip-api.com/json?fields=isp" 2>/dev/null)
+ISP=$(printf '%s' "$API" |
+    awk -F'"' '{for(i=1;i<NF;i++) if($i=="isp"){print $(i+2);break}}')
+
+printf '{"host":"%s","tunnel_id":"%s","code":"%s","internet":"%s","isp":"%s","status":"%s","status_text":"%s","tunnel":{"hostname":"%s","id":"%s","state":"%s","code":"%s"}}\n' \
+  "$(json_escape "$HOST")" \
+  "$(json_escape "$ID")" \
+  "$(json_escape "$CODE")" \
+  "$(json_escape "$INTERNET")" \
+  "$(json_escape "$ISP")" \
+  "$(json_escape "$STATUS")" \
+  "$(json_escape "$STATUS_TEXT")" \
+  "$(json_escape "$TUN_HOST")" \
+  "$(json_escape "$ID")" \
+  "$(json_escape "$TUN_STATE")" \
+  "$(json_escape "$CODE")"
+

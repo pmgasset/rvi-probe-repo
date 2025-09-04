@@ -1,38 +1,71 @@
 #!/bin/sh
-printf "Content-Type: application/json\r\n\r\n"
+# /www/cgi-bin/outage_check
+# chmod +x /www/cgi-bin/outage_check
 
-json_escape() {
-    printf '%s' "$1" | sed \
-        -e 's/\\/\\\\/g' \
-        -e 's/"/\\"/g' \
-        -e 's/\x08/\\b/g' \
-        -e 's/\x0c/\\f/g' \
-        -e 's/\n/\\n/g' \
-        -e 's/\r/\\r/g' \
-        -e 's/\t/\\t/g'
+echo "Content-Type: application/json"
+echo ""
+
+PROVIDER="$(echo "${QUERY_STRING}" | sed -n 's/.*provider=\([^&]*\).*/\1/p' | tr + ' ' | sed 's/%20/ /g' | tr '[:upper:]' '[:lower:]')"
+[ -n "$PROVIDER" ] || PROVIDER="unknown"
+
+CACHE="/tmp/outage_${PROVIDER}.json"
+TTL=300
+# >>>>> SET YOUR WORKER URL HERE <<<<<
+WORKER_URL="https://status-hunter.traveldata.workers.dev"
+
+now() { date +%s; }
+emit(){ cat "$1"; exit 0; }
+
+# Serve cache
+if [ -f "$CACHE" ]; then
+  ts=$(stat -c %Y "$CACHE" 2>/dev/null || stat -f %m "$CACHE" 2>/dev/null)
+  age=$(( $(now) - ts ))
+  [ "$age" -lt "$TTL" ] && emit "$CACHE"
+fi
+
+fetch() {
+  URL="$1"
+  UA="SupportLink/1.0"
+  if command -v curl >/dev/null 2>&1; then
+    curl -m 8 -fsSL -H "User-Agent: $UA" "$URL"
+  elif command -v uclient-fetch >/dev/null 2>&1; then
+    uclient-fetch -T 8 -O - "$URL" 2>/dev/null
+  else
+    wget -T 8 -qO- "$URL"
+  fi
 }
 
-WORKER_URL="$(uci -q get rviprobe.config.worker_url 2>/dev/null)"
 DATA=""
 if [ -n "$WORKER_URL" ]; then
-    DATA="$(curl -fsL "$WORKER_URL/internet-details" 2>/dev/null)"
+  DATA="$(fetch "${WORKER_URL}?provider=${PROVIDER}")"
 fi
+
+# Minimal official fallbacks if Worker unreachable
 if [ -z "$DATA" ]; then
-    DATA="$(curl -fsL 'http://ip-api.com/json/?fields=isp,asn,asname,country,regionName,city' 2>/dev/null)"
+  case "$PROVIDER" in
+    zoom)
+      J="$(fetch 'https://status.zoom.us/api/v2/summary.json')"
+      if [ -n "$J" ]; then
+        echo "$J" | grep -q '"indicator":"none"' && S="normal" || S="elevated"
+        printf '{"provider":"zoom","display_name":"Zoom","status":"%s","summary":"Zoom status summary","link":"https://status.zoom.us/","timestamp":%s}\n' "$S" "$(now)" > "$CACHE"
+        emit "$CACHE"
+      fi
+      ;;
+    slack)
+      J="$(fetch 'https://status.slack.com/api/v2.0.0/current')"
+      if [ -n "$J" ]; then
+        echo "$J" | grep -q '"status":"ok"' && S="normal" || S="elevated"
+        printf '{"provider":"slack","display_name":"Slack","status":"%s","summary":"Slack current status","link":"https://status.slack.com/","timestamp":%s}\n' "$S" "$(now)" > "$CACHE"
+        emit "$CACHE"
+      fi
+      ;;
+  esac
 fi
 
-ISP="$(printf '%s' "$DATA" | awk -F'"isp":"' '{print $2}' | awk -F'"' '{print $1}')"
-ASN="$(printf '%s' "$DATA" | awk -F'"asn":' '{print $2}' | awk -F'[,}]' '{print $1}')"
-ASNAME="$(printf '%s' "$DATA" | awk -F'"asname":"' '{print $2}' | awk -F'"' '{print $1}')"
-COUNTRY="$(printf '%s' "$DATA" | awk -F'"country":"' '{print $2}' | awk -F'"' '{print $1}')"
-REGION="$(printf '%s' "$DATA" | awk -F'"regionName":"' '{print $2}' | awk -F'"' '{print $1}')"
-CITY="$(printf '%s' "$DATA" | awk -F'"city":"' '{print $2}' | awk -F'"' '{print $1}')"
+if [ -n "$DATA" ]; then
+  printf '%s' "$DATA" > "$CACHE"
+  emit "$CACHE"
+fi
 
-printf '{"isp":"%s","asn":"%s","asname":"%s","country":"%s","region":"%s","city":"%s"}\n' \
-    "$(json_escape "$ISP")" \
-    "$(json_escape "$ASN")" \
-    "$(json_escape "$ASNAME")" \
-    "$(json_escape "$COUNTRY")" \
-    "$(json_escape "$REGION")" \
-    "$(json_escape "$CITY")"
-
+printf '{"provider":"%s","display_name":"%s","status":"unknown","summary":"Unable to determine status","timestamp":%s}\n' "$PROVIDER" "$(echo "$PROVIDER" | sed 's/\b\(.\)/\u\1/g; s/Tmobile/T-Mobile/')" "$(now)" > "$CACHE"
+emit "$CACHE"

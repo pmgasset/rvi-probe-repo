@@ -1,9 +1,71 @@
 #!/bin/sh
-printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
-provider=$(printf '%s' "$QUERY_STRING" | awk -F'provider=' '{print $2}' | cut -d'&' -f1)
-[ -n "$provider" ] || provider=""
-resp=$(/usr/bin/rvi-outage-check "$provider" 2>/dev/null || true)
-status=$(printf '%s' "$resp" | awk -F'"' '{for(i=1;i<NF;i++) if($i=="status"){print $(i+2);break}}')
-message=$(printf '%s' "$resp" | awk -F'"' '{for(i=1;i<NF;i++) if($i=="message"){print $(i+2);break}}')
-[ -n "$status" ] || status="unknown"
-printf '{"provider":"%s","status":"%s","message":"%s"}\n' "$provider" "$status" "$message"
+# /www/cgi-bin/outage_check
+# chmod +x /www/cgi-bin/outage_check
+
+echo "Content-Type: application/json"
+echo ""
+
+PROVIDER="$(echo "${QUERY_STRING}" | sed -n 's/.*provider=\([^&]*\).*/\1/p' | tr + ' ' | sed 's/%20/ /g' | tr '[:upper:]' '[:lower:]')"
+[ -n "$PROVIDER" ] || PROVIDER="unknown"
+
+CACHE="/tmp/outage_${PROVIDER}.json"
+TTL=300
+# >>>>> SET YOUR WORKER URL HERE <<<<<
+WORKER_URL="https://status-hunter.traveldata.workers.dev"
+
+now() { date +%s; }
+emit(){ cat "$1"; exit 0; }
+
+# Serve cache
+if [ -f "$CACHE" ]; then
+  ts=$(stat -c %Y "$CACHE" 2>/dev/null || stat -f %m "$CACHE" 2>/dev/null)
+  age=$(( $(now) - ts ))
+  [ "$age" -lt "$TTL" ] && emit "$CACHE"
+fi
+
+fetch() {
+  URL="$1"
+  UA="SupportLink/1.0"
+  if command -v curl >/dev/null 2>&1; then
+    curl -m 8 -fsSL -H "User-Agent: $UA" "$URL"
+  elif command -v uclient-fetch >/dev/null 2>&1; then
+    uclient-fetch -T 8 -O - "$URL" 2>/dev/null
+  else
+    wget -T 8 -qO- "$URL"
+  fi
+}
+
+DATA=""
+if [ -n "$WORKER_URL" ]; then
+  DATA="$(fetch "${WORKER_URL}?provider=${PROVIDER}")"
+fi
+
+# Minimal official fallbacks if Worker unreachable
+if [ -z "$DATA" ]; then
+  case "$PROVIDER" in
+    zoom)
+      J="$(fetch 'https://status.zoom.us/api/v2/summary.json')"
+      if [ -n "$J" ]; then
+        echo "$J" | grep -q '"indicator":"none"' && S="normal" || S="elevated"
+        printf '{"provider":"zoom","display_name":"Zoom","status":"%s","summary":"Zoom status summary","link":"https://status.zoom.us/","timestamp":%s}\n' "$S" "$(now)" > "$CACHE"
+        emit "$CACHE"
+      fi
+      ;;
+    slack)
+      J="$(fetch 'https://status.slack.com/api/v2.0.0/current')"
+      if [ -n "$J" ]; then
+        echo "$J" | grep -q '"status":"ok"' && S="normal" || S="elevated"
+        printf '{"provider":"slack","display_name":"Slack","status":"%s","summary":"Slack current status","link":"https://status.slack.com/","timestamp":%s}\n' "$S" "$(now)" > "$CACHE"
+        emit "$CACHE"
+      fi
+      ;;
+  esac
+fi
+
+if [ -n "$DATA" ]; then
+  printf '%s' "$DATA" > "$CACHE"
+  emit "$CACHE"
+fi
+
+printf '{"provider":"%s","display_name":"%s","status":"unknown","summary":"Unable to determine status","timestamp":%s}\n' "$PROVIDER" "$(echo "$PROVIDER" | sed 's/\b\(.\)/\u\1/g; s/Tmobile/T-Mobile/')" "$(now)" > "$CACHE"
+emit "$CACHE"

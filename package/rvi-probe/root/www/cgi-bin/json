@@ -2,6 +2,8 @@
 # JSON CGI for rvi-probe (robust WAN/WWAN detection)
 printf "Content-Type: application/json\r\n\r\n"
 
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 HOST="$(uci -q get system.@system[0].hostname)"
@@ -19,8 +21,12 @@ IP4=""
 
 RTT="$(ping -c1 -W1 1.1.1.1 2>/dev/null | awk -F'time=' '/time=/{print $2}' | cut -d' ' -f1 | head -n1)"
 
+API="$(curl -fsS --max-time 5 https://ip-api.com/json 2>/dev/null || echo '{}')"
+ISP=$(printf '%s' "$API" |
+        awk -F'"' '{for(i=1;i<NF;i++) if($i=="isp"){print $(i+2);break}}')
+
 VER="$(uci -q get rviprobe.@rviprobe[0].version)"
 [ -n "$VER" ] || VER="$(cat /etc/config/rviprobe_version 2>/dev/null || echo '0.5.0-8')"
 
-printf '{"host":"%s","board":"%s","wan_if":"%s","ip":"%s","rtt_ms":"%s","version":"%s"}\n' \
-  "${HOST}" "${BOARD}" "${WAN_IF}" "${IP4}" "${RTT}" "${VER}"
+printf '{"host":"%s","board":"%s","wan_if":"%s","ip":"%s","rtt_ms":"%s","isp":"%s","version":"%s"}\n' \
+  "${HOST}" "${BOARD}" "${WAN_IF}" "${IP4}" "${RTT}" "$(json_escape "$ISP")" "${VER}"

@@ -1,6 +1,6 @@
 #!/bin/sh
 # JSON status endpoint for SupportLink dashboard
-printf "Content-Type: application/json\r\n\r\n"
+printf "Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n"
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 

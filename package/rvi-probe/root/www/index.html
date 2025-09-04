@@ -147,10 +147,11 @@ const inetModal = document.getElementById('inetModal');
 const inetClose = document.getElementById('inetClose');
 const inetBody = document.getElementById('inetBody');
 const outageResults = document.getElementById('outageResults');
+const btnInetDetails = document.getElementById('btnInetDetails');
 
 async function refresh() {
   try {
-    const r = await fetch('/cgi-bin/supportlink');
+    const r = await fetch('/cgi-bin/supportlink', {cache: 'no-store'});
     const j = await r.json();
     host.textContent = j.host || j.hostname || '—';
     did.textContent = j.tunnel_id || j.device_id || (j.tunnel && j.tunnel.id) || j.did || '—';
@@ -183,32 +184,86 @@ document.getElementById('btnReboot').onclick = async () => {
   results.textContent = 'Reboot requested.';
 };
 
-document.getElementById('btnInetDetails').onclick = async () => {
-  inetModal.classList.add('open');
+function openModal(){ inetModal.classList.add('open'); inetModal.setAttribute('aria-hidden','false'); }
+function closeModal(){ inetModal.classList.remove('open'); inetModal.setAttribute('aria-hidden','true'); }
+inetClose.onclick = closeModal;
+inetModal.addEventListener('click', e => { if (e.target === inetModal) closeModal(); });
+
+btnInetDetails.onclick = async () => {
+  openModal();
   inetBody.innerHTML = '<div class="small muted">Loading network info…</div>';
-  const r = await fetch('/cgi-bin/internet-details');
-  const d = await r.json();
-  inetBody.innerHTML = '<pre class="mono small">' + JSON.stringify(d, null, 2) + '</pre>';
+  outageResults.innerHTML = '';
+  try {
+    const r = await fetch('/cgi-bin/internet-details', {cache: 'no-store'});
+    const txt = await r.text();
+    let j; try { j = JSON.parse(txt); } catch { throw new Error('Bad JSON from CGI: ' + txt.slice(0,120)); }
+    if (j.status === 'error') throw new Error(j.message || 'lookup failed');
+    inetBody.innerHTML = `
+      <div class="kgrid">
+        <div><span class="k">Public IP</span><div class="v mono">${j.ip ?? '—'}</div></div>
+        <div><span class="k">Carrier/ISP</span><div class="v">${j.isp || j.org || '—'}</div></div>
+        <div><span class="k">Type</span><div class="v">${j.type || 'unknown'}</div></div>
+        <div><span class="k">ASN</span><div class="v">${j.asn || '—'}</div></div>
+        <div><span class="k">City/Region</span><div class="v">${(j.city||'—')}, ${(j.region||'—')}</div></div>
+        <div><span class="k">Country</span><div class="v">${j.country || '—'}</div></div>
+        <div><span class="k">Source</span><div class="v">${j.source || 'multiple'}</div></div>
+        <div><span class="k">Updated</span><div class="v small">${j.timestamp ? new Date(j.timestamp*1000).toLocaleString() : '—'}</div></div>
+      </div>`;
+  } catch (e) {
+    inetBody.innerHTML = `<div class="small" style="color:#f87171">Unable to load Internet details.<br><span class="muted">${(e&&e.message)||e}</span></div>`;
+  }
+  document.querySelectorAll('#providerChips .chip').forEach(chip => checkProvider(chip, true));
 };
 
-inetClose.onclick = () => inetModal.classList.remove('open');
+function labelFor(key){
+  const labels = {att:"AT&T",verizon:"Verizon",tmobile:"T-Mobile",xfinity:"Xfinity",spectrum:"Spectrum",cox:"Cox",starlink:"Starlink",youtube:"YouTube",netflix:"Netflix",disneyplus:"Disney+",hulu:"Hulu",zoom:"Zoom",slack:"Slack",m365:"Microsoft 365",teams:"Teams",github:"GitHub",cloudflare:"Cloudflare",openai:"OpenAI"};
+  return labels[key] || key;
+}
+function statusDot(s){ return s==="normal"?"🟢":s==="elevated"?"🟡":s==="major"?"🔴":"⚪"; }
+function applyChipStatus(chip, status){
+  chip.classList.remove('ok','warn','bad','unknown');
+  if(status==="normal") chip.classList.add('ok');
+  else if(status==="elevated") chip.classList.add('warn');
+  else if(status==="major") chip.classList.add('bad');
+  else chip.classList.add('unknown');
+}
+async function checkProvider(chip, auto=false){
+  const provider = chip.dataset.provider;
+  try{
+    const r = await fetch('/cgi-bin/outage_check?provider=' + encodeURIComponent(provider), {cache:'no-store'});
+    const j = await r.json();
+    applyChipStatus(chip, j.status);
+    if(!auto){
+      const card = document.createElement('div');
+      card.className = 'result-card';
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+          <div><strong>${j.display_name || labelFor(provider)}</strong> ${statusDot(j.status)}</div>
+          <div class="small muted">${j.timestamp ? new Date(j.timestamp*1000).toLocaleTimeString() : ''}</div>
+        </div>
+        <div class="small" style="margin-top:4px">${j.summary || 'Status unknown.'}</div>
+        ${j.link ? `<div style="margin-top:6px"><a class="muted-link" href="${j.link}" target="_blank" rel="noopener">Check live reports</a></div>` : '' }
+      `;
+      outageResults.prepend(card);
+    }
+  }catch{
+    applyChipStatus(chip, 'unknown');
+  }
+}
 
-document.querySelectorAll('#providerChips .chip').forEach(chip => {
-  chip.addEventListener('click', async () => {
-    const provider = chip.dataset.provider;
-    chip.disabled = true;
-    chip.classList.add('unknown');
-    const r = await fetch('/cgi-bin/outage_check?provider=' + provider);
-    const d = await r.json();
-    chip.classList.remove('ok', 'warn', 'bad', 'unknown');
-    chip.classList.add(d.status || 'unknown');
-    const card = document.createElement('div');
-    card.className = 'result-card';
-    card.innerHTML = '<div class="kgrid"><div><span class="k">Provider</span><span class="v">' + provider + '</span></div><div><span class="k">Status</span><span class="v">' + (d.status || 'unknown') + '</span></div></div><div class="small mono">' + (d.message || '') + '</div>';
-    outageResults.appendChild(card);
-    chip.disabled = false;
-  });
+document.querySelectorAll('.chip').forEach(chip=>{
+  chip.addEventListener('click', ()=>checkProvider(chip,false));
 });
+
+const autoProviders=["youtube","netflix","disneyplus","hulu","zoom","slack","m365","teams","github","cloudflare","openai"];
+async function refreshAutoChips(){
+  for(const key of autoProviders){
+    const chip=document.querySelector(`.chip[data-provider="${key}"]`);
+    if(chip) checkProvider(chip,true);
+  }
+  setTimeout(refreshAutoChips,5*60*1000);
+}
+refreshAutoChips();
 </script>
 </body>
 </html>

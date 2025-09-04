@@ -1,8 +1,14 @@
 #!/bin/sh
 # JSON status endpoint for SupportLink dashboard
-printf "Content-Type: application/json\r\n\r\n"
+printf "Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n"
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+log() {
+    [ -n "$SUPPORTLINK_DEBUG" ] && logger -t supportlink "$*"
+}
+
+log "start pid=$$ time=$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
 json_escape() {
     printf '%s' "$1" | sed \
@@ -40,27 +46,61 @@ TUN_HOST=$(cat /etc/rvi/device_host 2>/dev/null)
 # Determine tunnel state by checking for cloudflared
 if pidof cloudflared >/dev/null 2>&1; then
     TUN_STATE="up"
+    log "cloudflared running"
 else
     TUN_STATE="down"
+    log "cloudflared not running"
+fi
+
+# Default to offline then probe connectivity
+INTERNET="offline"; STATUS="bad"; STATUS_TEXT="Offline"
+
+# Try multiple 204 endpoints before falling back to IP probes
+for URL in https://www.gstatic.com/generate_204 https://connectivitycheck.gstatic.com/generate_204; do
+    log "probe $URL"
+    if curl -fs --connect-timeout 5 --max-time 5 "$URL" >/dev/null 2>&1; then
+        log "probe $URL exit 0"
+        INTERNET="online"; STATUS="ok"; STATUS_TEXT="Online"
+        break
+    else
+        RC=$?
+        log "probe $URL exit $RC"
+    fi
+done
+
+# If still not marked online, attempt direct IP probes (bypasses DNS)
+if [ "$STATUS" != "ok" ]; then
+    for IP in 1.1.1.1 9.9.9.9 8.8.8.8; do
+        log "probe https://$IP"
+        if curl -fs --connect-timeout 5 --max-time 5 --insecure "https://$IP" >/dev/null 2>&1; then
+            log "probe https://$IP exit 0"
+            INTERNET="DNS issue"; STATUS="warn"; STATUS_TEXT="DNS issue"
+            break
+        else
+            RC=$?
+            log "probe https://$IP exit $RC"
+        fi
+    done
 fi
 
 CODE=$( /usr/bin/rvi-sharecode 2>/dev/null || echo "" )
 
-# Probe HTTPS connectivity; treat failure as offline
-if curl -fs --connect-timeout 5 https://1.1.1.1 >/dev/null 2>&1; then
+# Query ip-api.com only to populate ISP
+log "ip-api lookup"
+API=$(curl -fs --connect-timeout 5 --max-time 5 "http://ip-api.com/json?fields=isp" 2>/dev/null)
+RC=$?
+[ $RC -eq 0 ] || API=""
+log "ip-api exit $RC"
+ISP=$(printf '%s' "$API" |
+    awk -F'"' '{for(i=1;i<NF;i++) if($i=="isp"){print $(i+2);break}}')
+if [ -n "$API" ]; then
     INTERNET="online"
     STATUS="ok"
     STATUS_TEXT="Online"
+    log "ip-api success; status set online"
 else
-    INTERNET="offline"
-    STATUS="bad"
-    STATUS_TEXT="Offline"
+    log "ip-api failed; status remains $STATUS"
 fi
-
-# Query ip-api.com only to populate ISP
-API=$(curl -fs --connect-timeout 5 --max-time 5 "http://ip-api.com/json?fields=isp" 2>/dev/null)
-ISP=$(printf '%s' "$API" |
-    awk -F'"' '{for(i=1;i<NF;i++) if($i=="isp"){print $(i+2);break}}')
 
 printf '{"host":"%s","tunnel_id":"%s","code":"%s","internet":"%s","isp":"%s","status":"%s","status_text":"%s","tunnel":{"hostname":"%s","id":"%s","state":"%s","code":"%s"}}\n' \
   "$(json_escape "$HOST")" \

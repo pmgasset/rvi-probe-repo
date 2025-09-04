@@ -151,11 +151,9 @@ const pill = $('#statusPill'),
       inetBody = $('#inetBody'),
       outageResults = $('#outageResults');
 
-function setPill(state){
-  pill.classList.remove('ok','warn','bad');
-  if(state==='active'){ pill.classList.add('ok'); pill.textContent='Online'; }
-  else if(state==='starting'){ pill.classList.add('warn'); pill.textContent='Starting…'; }
-  else { pill.classList.add('bad'); pill.textContent='Offline'; }
+function setPill(state, text){
+  pill.className = 'pill ' + state;
+  pill.textContent = text || state;
 }
 
 let lastFetch=0, currentHost='';
@@ -192,16 +190,17 @@ async function ensureCode(valFromApi){
 
 async function getStatus(){
   try{
-    const r = await fetch('/cgi-bin/supportlink', {cache:'no-store'});
+    const r = await fetch('/cgi-bin/supportlink', {cache: 'no-store'});
     const j = await r.json();
     currentHost = j.host || (j.tunnel && j.tunnel.hostname) || '';
     host.textContent = currentHost || '—';
     did.textContent  = j.tunnel_id || j.device_id || (j.tunnel && j.tunnel.id) || '—';
     inet.textContent = j.isp || j.internet || j.status_text || '—';
-    setPill((j && j.tunnel && j.tunnel.state) || 'down');
+    const st = j.status || 'warn';
+    setPill(st, j.status_text || st);
     await ensureCode(j && j.tunnel && j.tunnel.code);
     lastFetch = Date.now();
-  }catch{ setPill('down'); }
+  }catch{ setPill('bad', 'Error'); }
 }
 setInterval(()=>{ if(!lastFetch) return; const s=((Date.now()-lastFetch)/1000)|0; ago.textContent = (s<60?`${s}s`:`${(s/60)|0}m`); },1000);
 async function refresh(){ await getStatus(); await ensureCode(null); setTimeout(refresh, 10000); }
@@ -236,6 +235,7 @@ btnInetDetails.onclick = async ()=>{
   }catch(e){
     inetBody.innerHTML = `<div class="small" style="color:#f87171">Unable to load Internet details.<br><span class="muted">${(e&&e.message)||e}</span></div>`;
   }
+  document.querySelectorAll('#providerChips .chip').forEach(chip => checkProvider(chip, true));
 };
 
 function labelFor(key){

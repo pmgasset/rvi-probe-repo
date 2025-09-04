@@ -192,7 +192,7 @@ async function ensureCode(valFromApi){
 
 async function getStatus(){
   try{
-    const r = await fetch('/cgi-bin/supportlink', {cache:'no-store'});
+    const r = await fetch('/cgi-bin/supportlink', {cache: 'no-store'});
     const j = await r.json();
     currentHost = j.host || (j.tunnel && j.tunnel.hostname) || '';
     host.textContent = currentHost || '—';

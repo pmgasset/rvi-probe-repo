@@ -1,0 +1,5 @@
+#!/bin/sh
+printf 'Content-Type: application/json\r\n\r\n'
+provider=$(printf '%s' "$QUERY_STRING" | awk -F'provider=' '{print $2}' | cut -d'&' -f1)
+[ -n "$provider" ] || provider=""
+printf '{"provider":"%s","status":"unknown","message":""}\n' "$provider"

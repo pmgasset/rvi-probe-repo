@@ -150,7 +150,7 @@ const outageResults = document.getElementById('outageResults');
 
 async function refresh() {
   try {
-    const r = await fetch('/cgi-bin/supportlink');
+    const r = await fetch('/cgi-bin/supportlink', {cache: 'no-store'});
     const j = await r.json();
     host.textContent = j.host || j.hostname || '—';
     did.textContent = j.tunnel_id || j.device_id || (j.tunnel && j.tunnel.id) || j.did || '—';

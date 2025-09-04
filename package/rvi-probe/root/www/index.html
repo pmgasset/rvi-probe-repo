@@ -189,6 +189,19 @@ document.getElementById('btnInetDetails').onclick = async () => {
   const r = await fetch('/cgi-bin/internet-details');
   const d = await r.json();
   inetBody.innerHTML = '<pre class="mono small">' + JSON.stringify(d, null, 2) + '</pre>';
+
+  const chips = document.querySelectorAll('#providerChips .chip');
+  chips.forEach(async chip => {
+    const provider = chip.dataset.provider;
+    try {
+      const rc = await fetch('/cgi-bin/outage_check?provider=' + provider, {cache: 'no-store'});
+      const dj = await rc.json();
+      chip.classList.remove('ok', 'warn', 'bad', 'unknown');
+      chip.classList.add(dj.status || 'unknown');
+    } catch (e) {
+      chip.classList.add('unknown');
+    }
+  });
 };
 
 inetClose.onclick = () => inetModal.classList.remove('open');

@@ -235,6 +235,7 @@ btnInetDetails.onclick = async ()=>{
   }catch(e){
     inetBody.innerHTML = `<div class="small" style="color:#f87171">Unable to load Internet details.<br><span class="muted">${(e&&e.message)||e}</span></div>`;
   }
+  document.querySelectorAll('#providerChips .chip').forEach(chip => checkProvider(chip, true));
 };
 
 function labelFor(key){

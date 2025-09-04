@@ -2,4 +2,8 @@
 printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
 provider=$(printf '%s' "$QUERY_STRING" | awk -F'provider=' '{print $2}' | cut -d'&' -f1)
 [ -n "$provider" ] || provider=""
-printf '{"provider":"%s","status":"unknown","message":""}\n' "$provider"
+resp=$(/usr/bin/rvi-outage-check "$provider" 2>/dev/null || true)
+status=$(printf '%s' "$resp" | awk -F'"' '{for(i=1;i<NF;i++) if($i=="status"){print $(i+2);break}}')
+message=$(printf '%s' "$resp" | awk -F'"' '{for(i=1;i<NF;i++) if($i=="message"){print $(i+2);break}}')
+[ -n "$status" ] || status="unknown"
+printf '{"provider":"%s","status":"%s","message":"%s"}\n' "$provider" "$status" "$message"

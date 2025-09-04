@@ -81,6 +81,7 @@
     <div class="actions">
       <button class="accent" id="btnSpeed">Run Speed Test</button>
       <button id="btnInetDetails">Internet Details</button>
+      <button id="btnLuci">Router Settings</button>
       <button class="danger" id="btnReboot">Restart My Router</button>
     </div>
 
@@ -144,8 +145,9 @@ const pill = $('#statusPill'),
       ago  = $('#ago'),
       results = $('#results'),
       btnSpeed = $('#btnSpeed'),
-      btnReboot = $('#btnReboot'),
       btnInetDetails = $('#btnInetDetails'),
+      btnLuci = $('#btnLuci'),
+      btnReboot = $('#btnReboot'),
       inetModal = $('#inetModal'),
       inetClose = $('#inetClose'),
       inetBody = $('#inetBody'),
@@ -289,6 +291,13 @@ async function refreshAutoChips(){
 refreshAutoChips();
 
 /* ----------------- Actions ----------------- */
+btnLuci.onclick = ()=>{
+  const pin = prompt('Enter the 6-digit Share Code to open router settings:', code.textContent || '');
+  if(!pin) return;
+  if(pin.trim() !== (code.textContent || '').trim()){ alert('Incorrect Share Code.'); return; }
+  location.href = '/cgi-bin/luci';
+};
+
 btnReboot.onclick = async ()=>{
   const pin = prompt('Enter the 6-digit Share Code to confirm router restart:', code.textContent || '');
   if(!pin) return;

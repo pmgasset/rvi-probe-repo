@@ -88,6 +88,7 @@ cat <<'HTML' > "$INDEX"
     <div class="actions">
       <button class="accent" id="btnSpeed">Run Speed Test</button>
       <button id="btnInetDetails">Internet Details</button>
+      <button id="btnLuci">Router Settings</button>
       <button class="danger" id="btnReboot">Restart My Router</button>
     </div>
 
@@ -181,6 +182,13 @@ document.getElementById('btnSpeed').onclick = async () => {
   results.textContent = 'Running speed test...';
   const r = await fetch('/cgi-bin/supportlink?action=speed');
   results.textContent = await r.text();
+};
+
+document.getElementById('btnLuci').onclick = () => {
+  const pin = prompt('Enter the 6-digit Share Code to open router settings:', code.textContent || '');
+  if(!pin) return;
+  if(pin.trim() !== (code.textContent || '').trim()) { alert('Incorrect Share Code'); return; }
+  location.href = '/cgi-bin/luci';
 };
 
 document.getElementById('btnReboot').onclick = async () => {
